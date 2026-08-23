@@ -69,7 +69,9 @@
 
 ## 开源 & 赞助
 
-MIT 协议开源，欢迎 fork、提 issue、给 star。
+本作品以 **GPL-3.0** 协议开源（见 `LICENSE`）。你可以自由使用、修改、再分发，但**必须同样以 GPLv3 开源你的改动**。欢迎 fork、提 issue、给 star。
+
+*Copyright © 2026 ember-restless*
 
 如果 AIM 数字大战给你带来了愉快，欢迎请作者喝一杯——你的 star 和反馈就是最好的支持。
 
