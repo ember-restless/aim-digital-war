@@ -12,11 +12,10 @@
 ## 项目结构（/root/aim/）
 ```
 server/          # Node.js + Socket.io 联机服务器
-  src/index.js   # 单端口入口：Socket.io 游戏 + 下载页一体（5000）
+  src/index.js   # 联机服务器入口（Socket.io 游戏服务）
   src/game/rules.js      # 规则引擎（服务端权威，全部判定在这）
   src/game/RoomGame.js   # 房间状态机
-  public/downloads/      # aim.apk / aim-win-source.zip / index.html / portraits/ / hitdemo/
-  test/          # rules_test.js / rules_extra_test.js / net_test.js
+  test/          # rules_test.js / rules_extra_test.js
 client/          # Flutter 手机端（Android APK）
   lib/tutorial/  # 新手教程：tutorial_engine.dart（本地迷你规则）/ tutorial_script.dart（9章剧本）/ tutorial_audio_map.dart（台词→音频）/ board_anim.dart（入场退场动画）
   lib/widgets/hit_fx.dart # 打击动画公共组件（游戏+教程共用）
@@ -25,19 +24,9 @@ client/          # Flutter 手机端（Android APK）
   assets/audio/tutorial/  # 129 句日语配音（6 音色，6.5MB）
   assets/audio/bgm/       # bgm_idle.mp3（95s）/ bgm_battle.mp3（125s）
   assets/art/default/     # 像素资源包：units/（0-9/敌版/桥）+ portraits/（7 张角色立绘）
-win_client/      # Python/pygame Win 端（源码zip分发给牢大）
-upload_server.py # 8001 端口音频上传服务（带网页界面，存 audio_upload/）
+win_client/      # Python/pygame Win 端
 docs/            # RULES.md（规则）/ tutorial_story.txt（9章剧本定稿）
 ```
-
-## 服务状态
-- **单端口 5000**：游戏 Socket.io + 下载页一体（`cd /root/aim/server && node src/index.js`）
-  - 下载：`http://your-server:5000/`（aim.apk / aim-win-source.zip）
-  - APK 直链：`http://your-server:5000/downloads/aim.apk`
-  - 打击动画演示页：`http://your-server:5000/hitdemo/`
-- **8001 端口**：音频上传服务（`python3 /root/aim/upload_server.py`），牢大传 BGM/音频用，存 `/root/aim/audio_upload/`
-- ⚠️ 端口勿冲突：3000=math, 4000=alarm, 5000=AIM, 1755=综合下载站, 9876=平板, 12345=像素画, 8082=TRPG, 3099=lrc, 8001=AIM 音频上传
-- 服务器地址：`your-server:5000`
 
 ## 功能特性（v1.0.0）
 - **新手教程（9 章剧情）**：Legio Numeri 军团故事，客户端本地实现不依赖服务器；galgame 式对话框（打字机逐字+点击音效）、7 张角色立绘、选项横置中间（明日方舟风）、教学等待时对话框隐藏改用像素风气泡引导（低饱和暗金/暗绿）、章节选择弹窗（菜单→教程）

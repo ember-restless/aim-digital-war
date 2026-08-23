@@ -32,3 +32,8 @@ Thumbs.db
 client/assets/audio/
 pc/assets/audio/
 docs/sig_*
+
+# 运维/上传脚本（服务器自用）
+server/src/upload_server.js
+tools/upload_server.py
+audio_upload/
