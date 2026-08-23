@@ -5,7 +5,7 @@
 K_DIR = [1, -1]              # 玩家0朝右(+1)，玩家1朝左(-1)
 K_RANGE = {3: 2, 4: 3}       # 3弓手射程2，4炮手射程3，其余1
 K_CAVALRY = {2, 5}           # 骑兵
-K_BRIDGE_OK = {1, 2, 3, 4}   # 能过桥的轻单位
+K_BRIDGE_OK = {1, 2, 3}   # 能过桥的轻单位（4炮手改重装，不可过桥）
 K_SPLIT_MIN = 5              # 可拆分的最小值
 
 _cell_id_counter = 0
@@ -224,7 +224,7 @@ class AimGame:
                 if 0 <= s1 < len(self.cells) and self.is_bridge(self.cells[s1]):
                     if v in K_BRIDGE_OK:
                         acts.append({'type': 'move', 'i': i, 'steps': 1})
-                    elif v == 5 or v == 7:
+                    elif v == 5 or v == 7 or v == 4:
                         acts.append({'type': 'move', 'i': i, 'steps': 1, 'fatal': True})
                 elif self.can_stand(s1, v):
                     acts.append({'type': 'move', 'i': i, 'steps': 1})

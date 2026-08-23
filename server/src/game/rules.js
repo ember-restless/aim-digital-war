@@ -7,7 +7,7 @@
 const DIR = [1, -1];        // 玩家0朝右(+1)，玩家1朝左(-1)
 const RANGE = { 3: 2, 4: 3 }; // 3弓手射程2，4炮手射程3，其余1
 const CAVALRY = new Set([2, 5]); // 骑兵
-const BRIDGE_OK = new Set([1, 2, 3, 4]); // 能过桥的轻单位
+const BRIDGE_OK = new Set([1, 2, 3]); // 能过桥的轻单位（4炮手改重装，不可过桥）
 const SPLIT_MIN = 5; // 可拆分的最小值
 
 // ---------- 状态构建 ----------
@@ -214,7 +214,7 @@ function genUnitActions(state, owner, acts) {
       if (s1 >= 0 && s1 < cells.length && isBridge(cells[s1])) {
         // 桥：轻单位正常过；5/7 走=桥塌人亡（可选，后果自负）
         if (BRIDGE_OK.has(v)) acts.push({ type: 'move', i, steps: 1 });
-        else if (v === 5 || v === 7) acts.push({ type: 'move', i, steps: 1, fatal: true });
+        else if (v === 5 || v === 7 || v === 4) acts.push({ type: 'move', i, steps: 1, fatal: true });
       } else if (canStand(state, s1, v)) {
         acts.push({ type: 'move', i, steps: 1 });
       }

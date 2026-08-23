@@ -30,3 +30,5 @@ MEMORY.md
 .DS_Store
 Thumbs.db
 client/assets/audio/
+pc/assets/audio/
+docs/sig_*
