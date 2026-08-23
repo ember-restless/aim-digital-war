@@ -32,12 +32,12 @@ docs/            # RULES.md（规则）/ tutorial_story.txt（9章剧本定稿�
 
 ## 服务状态
 - **单端口 5000**：游戏 Socket.io + 下载页一体（`cd /root/aim/server && node src/index.js`）
-  - 下载：`http://192.140.166.178:5000/`（aim.apk / aim-win-source.zip）
-  - APK 直链：`http://192.140.166.178:5000/downloads/aim.apk`
-  - 打击动画演示页：`http://192.140.166.178:5000/hitdemo/`
+  - 下载：`http://your-server:5000/`（aim.apk / aim-win-source.zip）
+  - APK 直链：`http://your-server:5000/downloads/aim.apk`
+  - 打击动画演示页：`http://your-server:5000/hitdemo/`
 - **8001 端口**：音频上传服务（`python3 /root/aim/upload_server.py`），牢大传 BGM/音频用，存 `/root/aim/audio_upload/`
 - ⚠️ 端口勿冲突：3000=math, 4000=alarm, 5000=AIM, 1755=综合下载站, 9876=平板, 12345=像素画, 8082=TRPG, 3099=lrc, 8001=AIM 音频上传
-- 服务器地址：`192.140.166.178:5000`
+- 服务器地址：`your-server:5000`
 
 ## 功能特性（v1.0.0）
 - **新手教程（9 章剧情）**：Legio Numeri 军团故事，客户端本地实现不依赖服务器；galgame 式对话框（打字机逐字+点击音效）、7 张角色立绘、选项横置中间（明日方舟风）、教学等待时对话框隐藏改用像素风气泡引导（低饱和暗金/暗绿）、章节选择弹窗（菜单→教程）
@@ -216,7 +216,7 @@ docs/            # RULES.md（规则）/ tutorial_story.txt（9章剧本定稿�
 
 ### 加载小贴士 + 投喂小猫咪（08-22 凌晨）
 - **tip**：`client/lib/game/tips.dart`，26 条随机展示——牢大投稿 9 条（yhb 赞助人 / 平衡前左边有多强 / awa / 我不要上学…）+ 离离补的角色（8基地 9指挥、3弓射2 4炮射3、2/5骑兵、7盾兵、1饲料）、规则（滚木3格、溢出插桥、过桥塌、吞超9变拉、死局判负）、技巧（喂滚木1→5、留点数、憋大快攻、困难AI特性）各若干；热座加载页 + 联机选服 loading 都显示。
-- **投喂**：主菜单顶栏「🐱 投喂」→ 弹窗网络加载微信收款码 `http://192.140.166.178:5000/downloads/wechat_qr.png`（8001 上传口：`curl -F "file=@码.png" http://192.140.166.178:8001/upload`，网页 `http://192.140.166.178:8001/` 直接拖拽上传，systemd `aim-upload.service` 常驻；换码不用重打包）。
+- **投喂**：主菜单顶栏「🐱 投喂」→ 弹窗网络加载微信收款码 `http://your-server:5000/downloads/wechat_qr.png`（8001 上传口：`curl -F "file=@码.png" http://your-server:8001/upload`，网页 `http://your-server:8001/` 直接拖拽上传，systemd `aim-upload.service` 常驻；换码不用重打包）。
 
 ### 三连修复（08-22 凌晨，牢大实测反馈）
 - **设置弹窗滚动**：主菜单 + 对局内设置弹窗内容超出小屏，加 `maxHeight 86% + SingleChildScrollView` 可滚动。

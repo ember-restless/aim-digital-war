@@ -232,7 +232,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
         });
         _log('系统', widget.lan
             ? '已连接局域网主机（${widget.server.host}）'
-            : '已连接「${widget.server.name}」（${widget.server.host}:${widget.server.port}）',
+            : '已连接「${widget.server.name}」',
             sys: true);
         _log('系统', '名字：${widget.playerName} · 输入消息回车发送', sys: true);
         // 断线重连：重新加入原房间（服务端恢复座位 + 推最新棋盘）
@@ -597,7 +597,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
                       // 复制服务器配置包下载地址（引导搭建服务器用）
                       await Clipboard.setData(const ClipboardData(text: 'http://192.140.166.178:5000/aim-server.zip'));
                       if (ctx.mounted) Navigator.pop(ctx);
-                      _alert('已复制链接', '服务器配置包下载地址已复制到剪贴板：\nhttp://192.140.166.178:5000/aim-server.zip\n在浏览器打开下载，按包内 README 引导搭建自己的服务器。');
+                      _alert('已复制链接', '服务器配置包下载地址已复制到剪贴板。在浏览器打开下载，按包内 README 引导搭建自己的服务器。');
                     },
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
