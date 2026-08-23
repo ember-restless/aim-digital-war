@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIM 数字大战 - 游戏介绍</title>
+<style>
+body { background:#11110f; color:#fff5dc; font-family:monospace; padding:20px; max-width:720px; margin:0 auto; line-height:1.7; }
+h1 { color:#ff4e35; font-size:22px; }
+a { color:#ffd36a; }
+.box { background:#1e1d1a; border:1px solid #5a554c; padding:20px; font-size:14px; white-space:pre-wrap; }
+.top { margin-bottom:14px; }
+</style>
+</head>
+<body>
+<div class="top"><a href="/aim_intro.txt">⬇ 下载 TXT 文件</a> &nbsp;|&nbsp; <a href="/video">视频上传</a> &nbsp;|&nbsp; <a href="/audio">音频上传</a></div>
+<h1>AIM 数字大战 - 游戏介绍</h1>
+<div class="box" id="content">加载中...</div>
+<div class="top" style="margin-top:14px;"><a href="/aim_intro.txt">⬇ 下载 TXT 文件</a></div>
+<script>
+fetch('/aim_intro.txt').then(r => r.text()).then(t => {
+  document.getElementById('content').textContent = t;
+});
+</script>
+</body>
+</html>

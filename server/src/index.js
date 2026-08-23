@@ -1,0 +1,586 @@
+// AIM 数字大战 — 联机服务器
+// 单端口 5000：游戏（Socket.io）+ 下载页（静态）+ /api/version 一体
+// ⚠️ 3000 是 math（Graphwar）的端口，勿动
+'use strict';
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const { Server } = require('socket.io');
+const { RoomGame } = require('./game/RoomGame');
+
+const DOWNLOAD_PORT = 5000;
+const DOWNLOAD_DIR = path.join(__dirname, '..', 'public', 'downloads');
+const CFG = require('./config.js');
+const VERSION = CFG.APP_VERSION;
+
+// ---------- 游戏服务器（Socket.io 挂到单端口 server，定义在后面） ----------
+const io = new Server({ cors: { origin: '*' } });
+
+const rooms = new Map(); // roomId -> RoomGame
+const socketRoom = new Map(); // socketId -> { roomId, playerIdx }
+const socketName = new Map(); // socketId -> name
+// 在线管理：socketId -> { name, status: 'lobby' | 'room:<id>' }
+const online = new Map();
+// 目录注册：serverId -> { name, host, port, players, maxPlayers, version, desc, ts }
+const directory = new Map();
+let roomSeq = 1000;
+let serverSeq = 1;
+
+function genRoomId() {
+  return 'A' + (roomSeq++);
+}
+
+function onlineCount() {
+  return online.size;
+}
+
+// 广播在线玩家列表（大厅右侧「在线的人」）
+function broadcastOnline() {
+  const list = [...online.entries()].map(([sid, info]) => ({
+    name: info.name,
+    status: info.status,
+    roomId: info.status.startsWith('room:') ? info.status.slice(5) : null,
+  }));
+  io.emit('player_list', list);
+}
+
+// 系统消息进大厅聊天框
+function sysMsg(text) {
+  io.emit('chat', { name: '系统', msg: text, sys: true });
+}
+
+// 更新某人的在线状态并广播
+function setStatus(socketId, status) {
+  const info = online.get(socketId);
+  if (!info) return;
+  info.status = status;
+  broadcastOnline();
+}
+
+function broadcastRoom(room) {
+  const pub = room.publicState();
+  for (const p of room.players) {
+    if (p) io.to(p.socketId).emit('room_update', pub);
+  }
+  for (const sp of room.spectators) {
+    io.to(sp.socketId).emit('room_update', pub);
+  }
+}
+
+function broadcastGame(room) {
+  if (room.isHotseat()) {
+    // 热座：只发当前回合玩家的视角（同一设备轮流操作）
+    const p0 = room.players[0];
+    if (p0) io.to(p0.socketId).emit('game_state', room.viewFor(room.state.turn));
+  } else {
+    for (let i = 0; i < room.players.length; i++) {
+      const p = room.players[i];
+      if (p) io.to(p.socketId).emit('game_state', room.viewFor(i));
+    }
+  }
+  // 观战者：完整棋盘视角（无操作权）
+  const specView = room.viewForSpectator();
+  if (specView) {
+    for (const sp of room.spectators) {
+      io.to(sp.socketId).emit('game_state', specView);
+    }
+  }
+}
+
+io.on('connection', (socket) => {
+  // ── 进服：报名字 + 占在线名额（人数上限保护）──
+  socket.on('hello', ({ name, version } = {}) => {
+    if (online.has(socket.id)) {
+      socket.emit('error', { msg: '重复连接' });
+      return;
+    }
+    if (onlineCount() >= CFG.SERVER_MAX_PLAYERS) {
+      socket.emit('error', { msg: `服务器已满（${CFG.SERVER_MAX_PLAYERS} 人），稍后再试` });
+      socket.disconnect(true);
+      return;
+    }
+    const n = String(name || '玩家').slice(0, 12);
+    online.set(socket.id, { name: n, status: 'lobby' });
+    socketName.set(socket.id, n);
+    socket.emit('hello_ok', { name: n, server: { name: CFG.SERVER_NAME, maxPlayers: CFG.SERVER_MAX_PLAYERS, online: onlineCount() } });
+    sysMsg(`「${n}」连接了服务器`);
+    broadcastOnline();
+    // 连上来先拉一次房间列表
+    const list = [...rooms.values()]
+      .filter(r => r.status === 'waiting' || r.status === 'playing')
+      .map(r => r.publicState());
+    socket.emit('room_list', list);
+  });
+
+  socket.on('create_room', ({ name, limit, mode, side, password, title, allowOwnRollerAttack } = {}) => {
+    if (socketRoom.has(socket.id)) {
+      socket.emit('error', { msg: '你已经在房间里了' });
+      return;
+    }
+    const room = new RoomGame(genRoomId(), 'AIM-' + roomSeq, mode === 'hotseat' ? 'hotseat' : 'online',
+      password ? String(password).slice(0, 12) : null,
+      title ? String(title).slice(0, 16) : null);
+    room.allowOwnRollerAttack = allowOwnRollerAttack !== false; // 规则开关：默认开（保持「敌我皆可」）
+    if (side === 'right') room.setHostSide('right');
+    const idx = room.isHotseat() ? 0 : (side === 'right' ? 1 : 0);
+    const res = room.addPlayer(socket.id, name, idx);
+    if (!res.ok) { socket.emit('error', { msg: res.reason }); return; }
+    socketName.set(socket.id, name || '玩家1');
+    if (online.has(socket.id)) online.get(socket.id).name = name || '玩家1';
+    rooms.set(room.id, room);
+    socketRoom.set(socket.id, { roomId: room.id, playerIdx: res.playerIdx });
+    socket.join(room.id);
+    setStatus(socket.id, 'room:' + room.id);
+    socket.emit('room_update', room.publicState());
+    socket.emit('you_are', { roomId: room.id, playerIdx: res.playerIdx });
+    sysMsg(`「${socketName.get(socket.id)}」创建了房间「${room.title}」`);
+  });
+
+  socket.on('join_room', ({ roomId, name, password, reconnectIdx } = {}) => {
+    if (socketRoom.has(socket.id)) {
+      socket.emit('error', { msg: '你已经在房间里了' });
+      return;
+    }
+    const room = rooms.get(roomId);
+    if (!room) { socket.emit('error', { msg: '房间不存在' }); return; }
+    // 密码验证（加入/观战/重连都要）
+    if (room.password && room.password !== String(password || '')) {
+      socket.emit('error', { msg: '密码错误' });
+      return;
+    }
+    // ── 断线重连：playing 状态 + reconnectIdx → 恢复原座位 ──
+    if (typeof reconnectIdx === 'number' && reconnectIdx >= 0 && room.status === 'playing') {
+      const rc = room.tryReconnect(socket.id, name, reconnectIdx);
+      if (!rc.ok) { socket.emit('error', { msg: rc.reason }); return; }
+      socketName.set(socket.id, name || '玩家' + (rc.playerIdx + 1));
+      if (online.has(socket.id)) online.get(socket.id).name = name || '玩家' + (rc.playerIdx + 1);
+      socketRoom.set(socket.id, { roomId: room.id, playerIdx: rc.playerIdx });
+      socket.join(room.id);
+      setStatus(socket.id, 'room:' + room.id);
+      socket.emit('you_are', { roomId: room.id, playerIdx: rc.playerIdx });
+      socket.emit('room_update', room.publicState());
+      broadcastRoom(room);
+      // 立即恢复棋盘视角（含观战者不需要）
+      if (room.state) socket.emit('game_state', room.viewFor(rc.playerIdx));
+      if (room.state && room.state.winner !== null) {
+        socket.emit('game_over', {
+          winner: room.state.winner,
+          winnerName: room.players[room.state.winner] ? room.players[room.state.winner].name : null,
+        });
+      }
+      sysMsg(`「${name}」重连回房间「${room.title}」`);
+      return;
+    }
+    const res = room.addPlayer(socket.id, name);
+    if (!res.ok) { socket.emit('error', { msg: res.reason }); return; }
+    socketName.set(socket.id, name || '玩家2');
+    if (online.has(socket.id)) online.get(socket.id).name = name || '玩家2';
+    socketRoom.set(socket.id, { roomId: room.id, playerIdx: res.playerIdx == null ? -1 : res.playerIdx });
+    socket.join(room.id);
+    if (res.spectator) {
+      socket.emit('you_are', { roomId: room.id, playerIdx: -1, spectator: true });
+      // 观战已开始的房间：立即推送当前棋盘
+      if (room.state) {
+        socket.emit('game_state', room.viewForSpectator());
+      }
+      setStatus(socket.id, 'room:' + room.id);
+    } else {
+      socket.emit('you_are', { roomId: room.id, playerIdx: res.playerIdx });
+      setStatus(socket.id, 'room:' + room.id);
+    }
+    socket.emit('room_update', room.publicState());
+    // 通知房主和其他玩家
+    broadcastRoom(room);
+    sysMsg(`「${socketName.get(socket.id)}」${res.spectator ? '进入观战' : '加入'}了房间「${room.title}」`);
+  });
+
+  // ── 房主踢人 ──
+  socket.on('kick', ({ roomId, targetSocketId, targetIdx } = {}) => {
+    const info = socketRoom.get(socket.id);
+    const room = rooms.get(roomId || (info && info.roomId));
+    if (!room || room.roomOwnerSocket !== socket.id || room.status !== 'waiting') return;
+    // 支持按玩家索引踢（客户端拿不到对方 socketId，用 targetIdx）
+    let target = targetSocketId;
+    if (!target && typeof targetIdx === 'number') {
+      const p = room.players[targetIdx];
+      if (p) target = p.socketId;
+    }
+    if (!target || !room.kickPlayer(target)) return;
+    const tinfo = socketRoom.get(target);
+    if (tinfo && tinfo.roomId === room.id) {
+      socketRoom.delete(target);
+      io.to(target).emit('kicked', { roomId: room.id });
+      setStatus(target, 'lobby');
+    }
+    broadcastRoom(room);
+    sysMsg(`玩家被移出了房间「${room.title}」`);
+  });
+
+  // ── 房主设置地图长度（不开始，仅预设）──
+  socket.on('set_limit', ({ roomId, limit } = {}) => {
+    const info = socketRoom.get(socket.id);
+    const room = rooms.get(roomId || (info && info.roomId));
+    if (!room || room.roomOwnerSocket !== socket.id || room.status !== 'waiting') return;
+    if (![12, 14, 16].includes(limit)) return;
+    room.limit = limit;
+    broadcastRoom(room);
+  });
+
+  // ── 准备/取消准备 ──
+  socket.on('ready', ({ roomId, ready } = {}) => {
+    const info = socketRoom.get(socket.id);
+    const room = rooms.get(roomId || (info && info.roomId));
+    if (!room || room.status !== 'waiting') return;
+    if (!room.setReady(socket.id, !!ready)) return;
+    broadcastRoom(room);
+  });
+
+  socket.on('set_side', ({ roomId, side } = {}) => {
+    const info = socketRoom.get(socket.id);
+    const room = rooms.get(roomId || (info && info.roomId));
+    if (!room || room.roomOwnerSocket !== socket.id || room.status !== 'waiting') return;
+    if (side !== 'left' && side !== 'right') return;
+    const wantRight = side === 'right';
+    if (wantRight !== (room.hostSide === 'right')) {
+      if (!room.isHotseat() && room.players[0] && room.players[1]) {
+        const tmp = room.players[0];
+        room.players[0] = room.players[1];
+        room.players[1] = tmp;
+        for (const [sid, i2] of socketRoom) {
+          if (i2.roomId === room.id && i2.playerIdx >= 0) {
+            i2.playerIdx = 1 - i2.playerIdx;
+          }
+        }
+        for (let i = 0; i < 2; i++) {
+          if (room.players[i]) io.to(room.players[i].socketId).emit('you_are', { roomId: room.id, playerIdx: i });
+        }
+      }
+      room.setHostSide(side);
+    }
+    broadcastRoom(room);
+  });
+
+  socket.on('list_rooms', () => {
+    const list = [...rooms.values()]
+      .filter(r => {
+        if (r.status === 'waiting') return true;
+        if (r.status === 'playing') return true; // 进行中可观战
+        return false;
+      })
+      .map(r => r.publicState());
+    socket.emit('room_list', list);
+  });
+
+  // 主动拉在线列表（客户端进大厅/定时刷新用，不依赖 hello 时的推送）
+  socket.on('list_players', () => {
+    const list = [...online.entries()].map(([sid, info]) => ({
+      name: info.name,
+      status: info.status,
+      roomId: info.status.startsWith('room:') ? info.status.slice(5) : null,
+    }));
+    socket.emit('player_list', list);
+  });
+
+  socket.on('start_game', ({ limit } = {}) => {
+    const info = socketRoom.get(socket.id);
+    if (!info) { socket.emit('error', { msg: '不在房间' }); return; }
+    const room = rooms.get(info.roomId);
+    if (!room) return;
+    if (room.roomOwnerSocket !== socket.id) { socket.emit('error', { msg: '只有房主能开始' }); return; }
+    const res = room.start(limit);
+    if (!res.ok) { socket.emit('error', { msg: res.reason }); return; }
+    broadcastGame(room);
+  });
+
+  socket.on('action', (action) => {
+    const info = socketRoom.get(socket.id);
+    if (!info) { socket.emit('error', { msg: '不在房间' }); return; }
+    const room = rooms.get(info.roomId);
+    if (!room || room.status !== 'playing' || !room.state) { socket.emit('error', { msg: '游戏未开始' }); return; }
+    if (info.playerIdx == null || info.playerIdx < 0) { socket.emit('error', { msg: '观战者不能操作' }); return; }
+    // 热座：同一设备轮流，视为当前回合方的操作
+    const playerIdx = room.isHotseat() ? room.state.turn : info.playerIdx;
+    const res = room.handleAction(playerIdx, action);
+    if (!res.ok) {
+      socket.emit('error', { msg: res.reason });
+      return;
+    }
+    broadcastGame(room);
+    if (room.status === 'ended') {
+      for (const p of room.players) {
+        if (p) io.to(p.socketId).emit('game_over', {
+          winner: room.state.winner,
+          winnerName: room.players[room.state.winner] ? room.players[room.state.winner].name : null,
+        });
+      }
+      for (const sp of room.spectators) {
+        io.to(sp.socketId).emit('game_over', {
+          winner: room.state.winner,
+          winnerName: room.players[room.state.winner] ? room.players[room.state.winner].name : null,
+        });
+      }
+    }
+  });
+
+  // 滚木逐步驱动：客户端播完一步动画后请求下一步（对齐热座 roll_step 协议，2026-08-21）
+  socket.on('roll_step', () => {
+    const info = socketRoom.get(socket.id);
+    if (!info) { socket.emit('error', { msg: '不在房间' }); return; }
+    const room = rooms.get(info.roomId);
+    if (!room || room.status !== 'playing' || !room.state) { socket.emit('error', { msg: '游戏未开始' }); return; }
+    room.handleRollStep();
+    broadcastGame(room);
+    if (room.status === 'ended') {
+      for (const p of room.players) {
+        if (p) io.to(p.socketId).emit('game_over', {
+          winner: room.state.winner,
+          winnerName: room.players[room.state.winner] ? room.players[room.state.winner].name : null,
+        });
+      }
+      for (const sp of room.spectators) {
+        io.to(sp.socketId).emit('game_over', {
+          winner: room.state.winner,
+          winnerName: room.players[room.state.winner] ? room.players[room.state.winner].name : null,
+        });
+      }
+    }
+  });
+
+  socket.on('leave_room', () => {
+    const info = socketRoom.get(socket.id);
+    if (!info) return;
+    const room = rooms.get(info.roomId);
+    socketRoom.delete(socket.id);
+    setStatus(socket.id, 'lobby');
+    if (room) {
+      room.removePlayer(socket.id);
+      const alive = room.players.filter(p => p).length + room.spectators.length;
+      if (alive === 0) {
+        rooms.delete(room.id);
+        sysMsg(`房间「${room.title}」已解散`);
+      } else {
+        broadcastRoom(room);
+        if (room.state && room.state.winner !== null) {
+          broadcastGame(room);
+        }
+      }
+    }
+  });
+
+  socket.on('disconnect', () => {
+    const info = socketRoom.get(socket.id);
+    const name = socketName.get(socket.id) || '玩家';
+    socketRoom.delete(socket.id);
+    socketName.delete(socket.id);
+    const wasOnline = online.delete(socket.id);
+    if (wasOnline) {
+      sysMsg(`「${name}」断开了连接`);
+      broadcastOnline();
+    }
+    if (!info) return;
+    const room = rooms.get(info.roomId);
+    if (!room) return;
+    room.removePlayer(socket.id);
+    // 活跃 = 未掉线玩家 + 观战者（掉线座位保留等重连，playing 全掉线也不解散，等 tick 超时判负）
+    const alive = room.players.filter(p => p && !p.disconnected).length + room.spectators.length;
+    if (room.status !== 'playing' && alive === 0) {
+      rooms.delete(room.id);
+      sysMsg(`房间「${room.title}」已解散`);
+    } else {
+      broadcastRoom(room);
+      if (room.state && room.state.winner !== null) {
+        broadcastGame(room);
+        for (const p of room.players) {
+          if (p) io.to(p.socketId).emit('game_over', {
+            winner: room.state.winner,
+            winnerName: room.players[room.state.winner] ? room.players[room.state.winner].name : null,
+          });
+        }
+      }
+    }
+  });
+
+  // ── 大厅全局聊天（所有在线的人都能看到；系统消息也走这里）──
+  socket.on('chat', ({ msg } = {}) => {
+    const name = socketName.get(socket.id) || '玩家';
+    const m = String(msg || '').trim().slice(0, 200);
+    if (!m) return;
+    io.emit('chat', { name, msg: m });
+  });
+
+  // ── 对局内快捷消息（Kards 式）：只发给同房间的玩家/观战，不打扰大厅 ──
+  socket.on('ingame_chat', ({ msg } = {}) => {
+    const name = socketName.get(socket.id) || '玩家';
+    const m = String(msg || '').trim().slice(0, 40);
+    if (!m) return;
+    const info = socketRoom.get(socket.id);
+    if (!info) return;
+    const room = rooms.get(info.roomId);
+    if (!room) return;
+    const targets = [...room.players, ...room.spectators].filter(p => p && p.socketId !== socket.id);
+    for (const p of targets) io.to(p.socketId).emit('ingame_chat', { name, msg: m });
+  });
+});
+
+const APP_VERSION_CODE = require('./config.js').APP_VERSION_CODE;
+const DOWNLOAD_PAGE = 'http://192.140.166.178:5000/';
+
+// ---------- 单端口服务器（5000）：/api/version + 静态下载页 ----------
+const mime = {
+  '.html': 'text/html; charset=utf-8',
+  '.apk': 'application/vnd.android.package-archive',
+  '.zip': 'application/zip',
+  '.md': 'text/plain; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8',
+  '.wasm': 'application/wasm',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.css': 'text/css; charset=utf-8',
+  '.bin': 'application/octet-stream',
+  '.dat': 'application/octet-stream',
+};
+
+const dlServer = http.createServer((req, res) => {
+  const pathname = (req.url || '/').split('?')[0];
+  if (pathname === '/api/version') {
+    // 客户端自动检查更新用
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      name: 'AIM 数字大战',
+      version: VERSION,
+      versionCode: APP_VERSION_CODE,
+      downloadPage: DOWNLOAD_PAGE,
+      apkUrl: DOWNLOAD_PAGE + 'downloads/aim.apk',
+      winUrl: DOWNLOAD_PAGE + 'downloads/aim-web.zip',
+    }));
+    return;
+  }
+  // ── 服务器目录：公开服务器列表（客户端自动选服 + 手动选择用）──
+  if (pathname === '/api/servers') {
+    const now = Date.now();
+    // 官方服务器自己（客户端内置地址，永远在列表第一位）
+    const self = {
+      id: 'official',
+      name: CFG.SERVER_NAME,
+      host: '192.140.166.178',
+      port: DOWNLOAD_PORT,
+      players: onlineCount(),
+      maxPlayers: CFG.SERVER_MAX_PLAYERS,
+      version: VERSION,
+      desc: CFG.SERVER_DESC,
+      official: true,
+    };
+    // 注册的公开服务器（60 秒内心跳过的才算活）
+    const others = [...directory.values()]
+      .filter(s => s.public && now - s.ts < 60000)
+      .map(s => ({ id: s.id, name: s.name, host: s.host, port: s.port, players: s.players, maxPlayers: s.maxPlayers, version: s.version, desc: s.desc, official: false }));
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ servers: [self, ...others] }));
+    return;
+  }
+  // ── 公开服务器注册（其他服务器启动后定时 POST 到这里报心跳）──
+  if (pathname === '/api/server/register') {
+    let body = '';
+    req.on('data', d => { body += d; if (body.length > 4096) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const b = JSON.parse(body || '{}');
+        const id = String(b.id || 'srv' + (serverSeq++));
+        directory.set(id, {
+          id,
+          name: String(b.name || 'AIM 服务器').slice(0, 20),
+          host: String(b.host || '').slice(0, 64),
+          port: parseInt(b.port, 10) || 5000,
+          players: parseInt(b.players, 10) || 0,
+          maxPlayers: parseInt(b.maxPlayers, 10) || 20,
+          version: String(b.version || VERSION).slice(0, 10),
+          desc: String(b.desc || '').slice(0, 40),
+          public: !!b.public,
+          ts: Date.now(),
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, msg: 'bad json' }));
+      }
+    });
+    return;
+  }
+  let url = decodeURIComponent(req.url.split('?')[0]);
+  if (url === '/') url = '/index.html';
+  // 路径前缀归一：req.url 形如 /downloads/foo 时，path.join 会拼成 DOWNLOAD_DIR/downloads/foo，需要剥掉 /downloads 前缀
+  if (url.startsWith('/downloads/')) url = url.substring('/downloads'.length);
+  else if (url === '/downloads') url = '/';
+  // 目录请求自动 fallback 到 index.html（避免 /portraits/ 这类路径 404）
+  if (url.endsWith('/')) url += 'index.html';
+  const file = path.join(DOWNLOAD_DIR, path.normalize(url));
+  if (!file.startsWith(DOWNLOAD_DIR)) {
+    res.writeHead(403); res.end('Forbidden'); return;
+  }
+  fs.stat(file, (err, st) => {
+    if (err || !st.isFile()) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('404 Not Found: ' + url);
+      return;
+    }
+    const ext = path.extname(file).toLowerCase();
+    res.writeHead(200, {
+      'Content-Type': mime[ext] || 'application/octet-stream',
+      'Content-Length': st.size, // 必须显式给大小：浏览器才能显示文件大小/进度，避免 chunked 大文件在低端浏览器/手表上闪退
+      'Content-Disposition': ext === '.apk' || ext === '.zip' ? 'attachment' : 'inline',
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Pragma': 'no-cache',
+    });
+    fs.createReadStream(file).pipe(res); // 流式发送，不整文件读内存
+  });
+});
+
+io.attach(dlServer); // Socket.io 与下载页同端口
+
+// 对局结束广播（判负时：tick 超时判负 / 其它结束路径复用）
+function endGameBroadcast(room) {
+  broadcastGame(room);
+  const w = room.state ? room.state.winner : null;
+  if (w == null) return;
+  for (const p of room.players) {
+    if (p) io.to(p.socketId).emit('game_over', {
+      winner: w,
+      winnerName: room.players[w] ? room.players[w].name : null,
+    });
+  }
+  for (const sp of room.spectators) {
+    io.to(sp.socketId).emit('game_over', {
+      winner: w,
+      winnerName: room.players[w] ? room.players[w].name : null,
+    });
+  }
+}
+
+// ── 断线重连周期检查（每 5s）：掉线 30s 超时判负；当前回合方掉线 15s 自动过回合 ──
+setInterval(() => {
+  for (const room of rooms.values()) {
+    if (room.status !== 'playing') continue;
+    const changed = room.tick();
+    if (changed) {
+      endGameBroadcast(room);
+      if (room.status === 'ended') sysMsg(`房间「${room.title}」对局结束`);
+    }
+  }
+}, 5000);
+
+dlServer.listen(DOWNLOAD_PORT, () => {
+  console.log(`[AIM] 单端口服务器 ${DOWNLOAD_PORT}（游戏 + 下载页一体, v${VERSION})`);
+});

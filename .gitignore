@@ -1,0 +1,32 @@
+# ── 编译产物 ──
+client/build/
+client/.dart_tool/
+client/.flutter-plugins*
+client/.packages
+client/android/local.properties
+client/android/.gradle/
+client/android/app/build/
+pc/__pycache__/
+casio/__pycache__/
+**/__pycache__/
+*.pyc
+
+# ── 依赖 ──
+server/node_modules/
+client/pubspec.lock
+
+# ── 隐私 / 个人素材（不上传）──
+server/public/downloads/
+audio_upload/
+MEMORY.md
+
+# ── 本地环境 ──
+.config/
+.flutter
+.gitconfig
+*.log
+
+# ── 系统 ──
+.DS_Store
+Thumbs.db
+client/assets/audio/
