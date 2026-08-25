@@ -37,3 +37,7 @@ docs/sig_*
 server/src/upload_server.js
 tools/upload_server.py
 audio_upload/
+
+# 临时备份 / 封面素材（脚本保留，图片不入库）
+*.bak-*
+covers/*.png

@@ -106,7 +106,7 @@ const Map<String, String> lineAudioMap = {
   '不过——您也得记住另一件事': 'assets/audio/tutorial/line125_7.mp3',
   '这桥，叫独木桥。战场上，有兵受了重创，会摔出这么一座桥来': 'assets/audio/tutorial/line126_7.mp3',
   '希望我解释一下原理？……抱歉，虽然战场约定是我所撰写的，但那其实也只是求对过往经验的总结……': 'assets/audio/tutorial/line127_7.mp3',
-  '桥不结实，像Primus、Quartus那样的小个子过去容易，像我们这样的就过不去了…': 'assets/audio/tutorial/line128_7.mp3',
+  '桥不结实，像Primus、Secundus那样的小个子过去容易，像我们这样的就过不去了…': 'assets/audio/tutorial/line128_7.mp3',
   '重的东西，桥撑不住。我这种老骨头，比谁都重': 'assets/audio/tutorial/line129_7.mp3',
   '所以啊——我在前面挡箭，您在后面想办法。别让我这身老骨头，白站在桥上': 'assets/audio/tutorial/line130_7.mp3',
   '…如果实在没有办法…躲我身后，指挥官，只要我不倒，我就会护着你们所有人': 'assets/audio/tutorial/line131_7.mp3',

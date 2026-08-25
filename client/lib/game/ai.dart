@@ -215,7 +215,7 @@ class AimAi {
     final dir = owner == 0 ? 1 : -1;
     final j = i + dir;
     final keep = (a['keep'] as int?) ?? 1;
-    // 拆出轻单位（1-4）过桥 → 有用
+    // 拆出轻单位（1-3）过桥 → 有用
     if (j >= 0 && j < cells.length && cells[j].isB && kBridgeOk.contains(keep)) {
       return 60;
     }

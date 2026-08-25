@@ -133,8 +133,8 @@ function canPass(state, idx, owner) {
   return false; // 有数字单位不能踩
 }
 
-// 某格是否可站（移动终点）：空地可站；桥只有轻单位(1-4)能站，
-// 5/6/7 走桥 = 桥塌人亡（但 UI 上可选，后果自负）
+// 某格是否可站（移动终点）：空地可站；桥只有轻单位(1-3)能站，
+// 4/5/6/7 走桥 = 桥塌人亡（但 UI 上可选，后果自负）
 function canStand(state, idx, unitV) {
   const c = state.map.cells[idx];
   if (!c) return false;

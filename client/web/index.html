@@ -17,6 +17,31 @@
   <base href="$FLUTTER_BASE_HREF">
 
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <style>
+    /* 锁死页面滚动：iOS 键盘弹起时页面不再跳动 */
+    html, body { margin: 0; height: 100%; overflow: hidden; }
+    flutter-view { position: fixed; top: 0; left: 0; width: 100%; height: 100%; }
+  </style>
+  <script>
+    /* 键盘弹起（visualViewport 变矮）时锁死 flutter-view 高度，阻止引擎重排抖动 */
+    (function () {
+      if (!('visualViewport' in window)) return;
+      var vv = window.visualViewport;
+      var winH = window.innerHeight;
+      var locked = false;
+      function onVvResize() {
+        var fv = document.querySelector('flutter-view');
+        if (!fv) return;
+        if (vv.height < winH * 0.65) {
+          if (!locked) { fv.style.height = winH + 'px'; locked = true; }
+        } else {
+          if (locked) { fv.style.height = ''; locked = false; }
+        }
+      }
+      vv.addEventListener('resize', onVvResize);
+    })();
+  </script>
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="A new Flutter project.">
 

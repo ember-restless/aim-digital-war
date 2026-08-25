@@ -13,6 +13,7 @@ import '../widgets/hit_fx.dart';
 import '../widgets/settings_panel.dart';
 import '../widgets/game_over_anim.dart';
 import '../tutorial/board_anim.dart';
+import '../game/unit_cards.dart';
 
 const _myC = Color(0xFFFF4E35);     // signal 橙红
 const _enemyC = Color(0xFFB12718);   // 深红
@@ -1324,6 +1325,82 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     return false;
   }
 
+  // ── 长按查看单位卡片（速查卡：忘记单位用途时用，样式同教程角色卡） ──
+  void _showUnitCard(int i, dynamic c) {
+    if (_animLock || _exiting) return;
+    if (c == null) return;
+    final rawV = c['v'];
+    if (rawV == null || (rawV as num) <= 0) return; // 空地 / 桥不弹卡
+    final v = rawV.toInt();
+    final card = kUnitCards[v];
+    if (card == null) return;
+    final size = MediaQuery.sizeOf(context);
+    showDialog<void>(
+      context: context,
+      barrierColor: const Color(0xB8000000),
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        insetPadding: EdgeInsets.symmetric(horizontal: size.width * 0.07, vertical: 40),
+        child: Container(
+          width: size.width * 0.86,
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A1916),
+            border: Border.all(color: const Color(0xFF5A554C), width: 2),
+            boxShadow: const [BoxShadow(color: Color(0x88000000), blurRadius: 20, spreadRadius: 4)],
+          ),
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _unitCardPortrait(v, card),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _pt(card.name, 22, _warnC),
+                    _pt('『$v 号』', 12, _dimC),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(color: const Color(0xFF2A2824)),
+                      child: _pt(card.stat, 13, _panelC),
+                    ),
+                    const SizedBox(height: 8),
+                    for (final line in card.bio.split('\n')) _pt(line, 12, _dimC, bold: false),
+                    const SizedBox(height: 8),
+                    _pt('轻点空白处关闭', 10, _dimC, bold: false),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _unitCardPortrait(int v, UnitCard card) {
+    const pw = 100.0;
+    if (card.portrait != null) {
+      return SizedBox(
+        width: pw,
+        child: AspectRatio(
+          aspectRatio: 160 / 213,
+          child: Image.asset(
+            'assets/art/default/portraits/${card.portrait}.png',
+            fit: BoxFit.contain,
+          ),
+        ),
+      );
+    }
+    // 无立绘（6 滚木 / 8 基地 / 9 指挥部）：数字像素图
+    return Image.asset('assets/art/default/units/$v.png',
+        width: pw, fit: BoxFit.contain, filterQuality: FilterQuality.none);
+  }
+
   void _clickCell(int i) {
     if (_animLock || _exiting) return; // 动画/退场期间锁定操作
     if (!_myTurn || state == null) return;
@@ -1928,6 +2005,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
               return GestureDetector(
                 key: ValueKey('cell$cellId'),
                 onTap: () => _clickCell(i),
+                onLongPress: () => _showUnitCard(i, c),
                 child: _exiting
                     // 退出：整盘数字朝自家方向飞走淡出（与教程退场同款）
                     ? BoardExitCell(

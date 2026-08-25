@@ -5,6 +5,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 const { Server } = require('socket.io');
 const { RoomGame } = require('./game/RoomGame');
 
@@ -537,14 +538,28 @@ const dlServer = http.createServer((req, res) => {
       return;
     }
     const ext = path.extname(file).toLowerCase();
-    res.writeHead(200, {
+    // gzip：web 资源（js/wasm 等）压缩后体积大减；已压缩格式（apk/png/zip）跳过
+    const COMPRESSIBLE = ['.js', '.wasm', '.json', '.html', '.css', '.data', '.otf', '.ttf', '.txt', '.svg', '.map'];
+    const wantGzip = COMPRESSIBLE.includes(ext) && (req.headers['accept-encoding'] || '').includes('gzip');
+    // 缓存：web 构建产物（除 index.html）允许缓存 1 天，避免每次刷新全量重下 40MB
+    const inWeb = file.startsWith(path.join(DOWNLOAD_DIR, 'web'));
+    const isIndex = path.basename(file) === 'index.html';
+    const cacheControl = inWeb && !isIndex ? 'public, max-age=86400' : 'no-store, no-cache, must-revalidate';
+    const headers = {
       'Content-Type': mime[ext] || 'application/octet-stream',
-      'Content-Length': st.size, // 必须显式给大小：浏览器才能显示文件大小/进度，避免 chunked 大文件在低端浏览器/手表上闪退
-      'Content-Disposition': ext === '.apk' || ext === '.zip' ? 'attachment' : 'inline',
-      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Content-Disposition': ['.apk', '.zip', '.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext) ? 'attachment' : 'inline',
+      'Cache-Control': cacheControl,
       'Pragma': 'no-cache',
-    });
-    fs.createReadStream(file).pipe(res); // 流式发送，不整文件读内存
+    };
+    if (wantGzip) {
+      headers['Content-Encoding'] = 'gzip';
+      res.writeHead(200, headers); // gzip 后长度未知，走 chunked
+      fs.createReadStream(file).pipe(zlib.createGzip()).pipe(res);
+    } else {
+      headers['Content-Length'] = st.size; // 显式给大小：低端浏览器/手表上避免 chunked 闪退
+      res.writeHead(200, headers);
+      fs.createReadStream(file).pipe(res); // 流式发送，不整文件读内存
+    }
   });
 });
 

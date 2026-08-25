@@ -130,7 +130,7 @@ class TutEngine extends ChangeNotifierWrapper {
   static const _enemyDir = -1;                 // 敌方朝左
   static const _range = {3: 2, 4: 3};
   static const _cavalry = {2, 5};
-  static const _bridgeOk = {1, 2, 3, 4};
+  static const _bridgeOk = {1, 2, 3}; // 4炮手改重装，不可过桥
 
   TutEngine() {
     cells = []; // 初始无地图（剧本 board 指令出现后才展开）
