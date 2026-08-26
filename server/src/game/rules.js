@@ -59,6 +59,9 @@ function createGame({ limit = 16, allowOwnRollerAttack = true } = {}) {
       produce: [0, 0], // 每方造兵数
     },
     turnCount: 0,       // 已过回合数
+    // ── 重复操作判负（象棋式「三次重复」，牢大定）──
+    // 指纹 = 玩家 | 操作签名 | 操作后棋盘快照；同一指纹第 3 次出现 → 制造循环者判负
+    _opHistory: {},
   };
 }
 
@@ -714,6 +717,36 @@ function checkWin(state) {
   }
 }
 
+// ── 重复操作判负（象棋式「三次重复」，牢大定）──
+// 操作指纹 = 玩家 | 操作签名 | 操作后棋盘快照（含桥/滚木压着/轮到谁）
+// 同一指纹第 3 次出现 → 制造循环的玩家直接判负
+function boardHash(state) {
+  return state.map.cells
+    .map((c) => `${c.v},${c.o ?? ''},${c.bridge ? 1 : 0},${c.onBridge ? 1 : 0},${c.auto ? 1 : 0},${c.pressedV ?? ''},${c.pressedO ?? ''}`)
+    .join(';');
+}
+
+function opSig(action) {
+  switch (action.type) {
+    case 'move': return `move:${action.i}:${action.steps}`;
+    case 'attack': return `attack:${action.i}:${action.j}`;
+    case 'split': return `split:${action.i}:${action.keep}`;
+    case 'devour': return `devour:${action.i}:${action.j}`;
+    case 'produce': return `produce:${action.i}`;
+    default: return String(action.type);
+  }
+}
+
+function recordOp(state, owner, action) {
+  const fp = `${owner}|${opSig(action)}|${boardHash(state)}`;
+  const n = (state._opHistory[fp] || 0) + 1;
+  state._opHistory[fp] = n;
+  if (n >= 3) {
+    state.winner = 1 - owner;
+    state.log.push(`玩家${owner}重复完全相同操作三次（循环），判负`);
+  }
+}
+
 // 统一入口：执行一个行动（支持自动选阶段 + 点数耗尽自动过回合）
 // [deferRoll] 手动 endTurn 时延后滚木（动画层逐步驱动，对齐热座）
 function applyAction(state, owner, action, deferRoll) {
@@ -734,6 +767,7 @@ function applyAction(state, owner, action, deferRoll) {
       if (!doMove(state, owner, action.i, action.steps)) return { ok: false, reason: '移动不合法' };
       state.points--;
       checkWin(state);
+      if (!state.winner) recordOp(state, owner, action); // 重复操作三次判负（象棋式）
       maybeAutoEnd(state);
       return { ok: true };
     }
@@ -742,6 +776,7 @@ function applyAction(state, owner, action, deferRoll) {
       if (!doAttack(state, owner, action.i, action.j)) return { ok: false, reason: '攻击不合法' };
       state.points--;
       checkWin(state);
+      if (!state.winner) recordOp(state, owner, action); // 重复操作三次判负（象棋式）
       maybeAutoEnd(state);
       return { ok: true };
     }
@@ -750,6 +785,7 @@ function applyAction(state, owner, action, deferRoll) {
       if (!doSplit(state, owner, action.i, action.keep)) return { ok: false, reason: '拆分不合法' };
       state.points--;
       checkWin(state);
+      if (!state.winner) recordOp(state, owner, action); // 重复操作三次判负（象棋式）
       maybeAutoEnd(state);
       return { ok: true };
     }
@@ -758,6 +794,7 @@ function applyAction(state, owner, action, deferRoll) {
       if (!doDevour(state, owner, action.i, action.j)) return { ok: false, reason: '吞噬不合法' };
       state.points--;
       checkWin(state);
+      if (!state.winner) recordOp(state, owner, action); // 重复操作三次判负（象棋式）
       maybeAutoEnd(state);
       return { ok: true };
     }
@@ -766,6 +803,7 @@ function applyAction(state, owner, action, deferRoll) {
       if (!doProduce(state, owner, action.i)) return { ok: false, reason: '造兵不合法' };
       state.produceLeft--;
       checkWin(state);
+      if (!state.winner) recordOp(state, owner, action); // 重复操作三次判负（象棋式）
       maybeAutoEnd(state);
       return { ok: true };
     }

@@ -76,6 +76,9 @@ class AimGame:
         self._last_roll_acts = None
         self._roll_step_seq = 0
         self._pending_roll = False
+        # ── 重复操作判负（象棋式「三次重复」，牢大定）──
+        # 指纹 = 玩家 | 操作签名 | 操作后棋盘快照；同一指纹第 3 次出现 → 制造循环者判负
+        self._op_history = {}
 
     # ── 基础 ──
     def dir_of(self, owner):
@@ -639,6 +642,37 @@ class AimGame:
                 self.winner = 1 - o
                 self.log.append(f'玩家{1 - o}获胜！')
 
+    # ── 重复操作判负（象棋式「三次重复」，与 server rules.js 逐行对应）──
+    def _board_hash(self):
+        return ';'.join(
+            f"{c.v},{c.o if c.o is not None else ''},{1 if c.bridge else 0},"
+            f"{1 if c.onBridge else 0},{1 if c.auto else 0},"
+            f"{c.pressedV if c.pressedV is not None else ''},"
+            f"{c.pressedO if c.pressedO is not None else ''}"
+            for c in self.cells)
+
+    def _op_sig(self, action):
+        t = action.get('type')
+        if t == 'move':
+            return f"move:{action['i']}:{action.get('steps', 1)}"
+        if t == 'attack':
+            return f"attack:{action['i']}:{action['j']}"
+        if t == 'split':
+            return f"split:{action['i']}:{action.get('keep', 0)}"
+        if t == 'devour':
+            return f"devour:{action['i']}:{action['j']}"
+        if t == 'produce':
+            return f"produce:{action['i']}"
+        return t or ''
+
+    def _record_op(self, owner, action):
+        fp = f"{owner}|{self._op_sig(action)}|{self._board_hash()}"
+        n = self._op_history.get(fp, 0) + 1
+        self._op_history[fp] = n
+        if n >= 3:
+            self.winner = 1 - owner
+            self.log.append(f'玩家{owner}重复完全相同操作三次（循环），判负')
+
     # ── 统一入口 ──
     def apply_action(self, owner, action, defer_roll=False):
         if self.winner is not None:
@@ -663,6 +697,8 @@ class AimGame:
                 return {'ok': False, 'reason': '移动不合法'}
             self.points -= 1
             self.check_win()
+            if self.winner is None:
+                self._record_op(owner, action)  # 重复操作三次判负（象棋式）
             self.maybe_auto_end()
             return {'ok': True}
         if t == 'attack':
@@ -672,6 +708,8 @@ class AimGame:
                 return {'ok': False, 'reason': '攻击不合法'}
             self.points -= 1
             self.check_win()
+            if self.winner is None:
+                self._record_op(owner, action)  # 重复操作三次判负（象棋式）
             self.maybe_auto_end()
             return {'ok': True}
         if t == 'split':
@@ -681,6 +719,8 @@ class AimGame:
                 return {'ok': False, 'reason': '拆分不合法'}
             self.points -= 1
             self.check_win()
+            if self.winner is None:
+                self._record_op(owner, action)  # 重复操作三次判负（象棋式）
             self.maybe_auto_end()
             return {'ok': True}
         if t == 'devour':
@@ -690,6 +730,8 @@ class AimGame:
                 return {'ok': False, 'reason': '吞噬不合法'}
             self.points -= 1
             self.check_win()
+            if self.winner is None:
+                self._record_op(owner, action)  # 重复操作三次判负（象棋式）
             self.maybe_auto_end()
             return {'ok': True}
         if t == 'produce':
@@ -699,6 +741,8 @@ class AimGame:
                 return {'ok': False, 'reason': '造兵不合法'}
             self.produce_left -= 1
             self.check_win()
+            if self.winner is None:
+                self._record_op(owner, action)  # 重复操作三次判负（象棋式）
             self.maybe_auto_end()
             return {'ok': True}
         if t == 'endTurn':

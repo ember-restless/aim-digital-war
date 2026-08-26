@@ -1853,6 +1853,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
   Widget _overlay(dynamic s) {
     if (over == null) return const SizedBox.shrink();
     final hotseat = s['hotseat'] == true;
+    final reason = _overSubReason(s); // 判负原因（重复操作/死局/掉线）
     String txt;
     Color col;
     String sub;
@@ -1861,12 +1862,12 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       final w = (over['winner'] as num?)?.toInt() ?? 0;
       txt = w == 0 ? '左胜' : '右胜';
       col = _warnC;
-      sub = '${names[w]} 把对手的数字减到了零';
+      sub = reason.isEmpty ? '${names[w]} 把对手的数字减到了零' : '${names[w]} $reason';
     } else {
       final win = over['winner'] == s['yourIdx'];
       txt = win ? '胜 利' : '败 北';
       col = win ? const Color(0xFF5AC87A) : _enemyC;
-      sub = win ? '敌方数字和归零' : '你的数字和归零了';
+      sub = reason.isEmpty ? (win ? '敌方数字和归零' : '你的数字和归零了') : reason;
     }
     _playSfx(over['winner'] == s['yourIdx'] || (s['hotseat'] == true && (over['winner'] as num?)?.toInt() == 0) ? 'win' : 'lose');
     return GameOverAnim(
@@ -1876,6 +1877,17 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       onBack: widget.onBack,
       state: s,
     );
+  }
+
+  // 从对局 log 推导判负原因（重复操作/死局/掉线），无则空串（默认数字和归零）
+  String _overSubReason(dynamic s) {
+    final log = (s['log'] as List?) ?? [];
+    if (log.isEmpty) return '';
+    final last = log.last.toString();
+    if (last.contains('重复完全相同操作三次')) return '重复完全相同操作三次（循环），判负';
+    if (last.contains('无任何可执行行动')) return '无任何可执行行动，判负';
+    if (last.contains('掉线')) return last;
+    return '';
   }
 
   Widget _infoBar(dynamic s) {

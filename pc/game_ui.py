@@ -939,6 +939,19 @@ class GameUI:
         }
         self._over_t0 = time.time()
 
+    def _over_sub_reason(self):
+        """从对局 log 推导判负原因（重复操作/死局/掉线），无则空串（默认数字和归零）。"""
+        if not self.game.log:
+            return ''
+        last = self.game.log[-1]
+        if '重复完全相同操作三次' in last:
+            return '重复完全相同操作三次（循环），判负'
+        if '无任何可执行行动' in last:
+            return '无任何可执行行动，判负'
+        if '掉线' in last:
+            return last
+        return ''
+
     def _draw_over(self):
         elap = time.time() - self._over_t0
         # 遮罩淡入
@@ -969,7 +982,8 @@ class GameUI:
         if elap > 0.3:
             sa = min(255, int(255 * (elap - 0.3) / 0.4))
             fs = _font(18)
-            sub = fs.render(f'{win_name} 把对手的数字减到了零', True, DIM)
+            reason = self._over_sub_reason()
+            sub = fs.render(reason or f'{win_name} 把对手的数字减到了零', True, DIM)
             sub.set_alpha(sa)
             self.screen.blit(sub, ((self.w - sub.get_width()) // 2, 190))
         # 统计（逐行淡入）

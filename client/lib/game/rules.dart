@@ -77,6 +77,10 @@ class AimGame {
   };
   int turnCount = 0; // 已过回合数
 
+  // ── 重复操作判负（象棋式「三次重复」，牢大定）──
+  // 指纹 = 玩家 | 操作签名 | 操作后棋盘快照；同一指纹第 3 次出现 → 制造循环者判负
+  Map<String, int> _opHistory = {};
+
   List<int> _statsList(String key) => (stats[key] as List).cast<int>();
 
   AimGame({int limit = 16, this.allowOwnRollerAttack = true}) {
@@ -720,6 +724,46 @@ class AimGame {
     }
   }
 
+  // ── 重复操作判负（象棋式「三次重复」，与 server rules.js 逐行对应）──
+  String _boardHash() {
+    return cells
+        .map((c) =>
+            '${c.v},${c.o ?? ''},${c.bridge ? 1 : 0},${c.onBridge ? 1 : 0},${c.auto ? 1 : 0},${c.pressedV ?? ''},${c.pressedO ?? ''}')
+        .join(';');
+  }
+
+  String _opSig(Map<String, dynamic> action) {
+    final type = action['type'] as String?;
+    final i = action['i'] is num ? (action['i'] as num).toInt() : -1;
+    final steps = action['steps'] is num ? (action['steps'] as num).toInt() : 1;
+    final j = action['j'] is num ? (action['j'] as num).toInt() : -1;
+    final keep = action['keep'] is num ? (action['keep'] as num).toInt() : 0;
+    switch (type) {
+      case 'move':
+        return 'move:$i:$steps';
+      case 'attack':
+        return 'attack:$i:$j';
+      case 'split':
+        return 'split:$i:$keep';
+      case 'devour':
+        return 'devour:$i:$j';
+      case 'produce':
+        return 'produce:$i';
+      default:
+        return type ?? '';
+    }
+  }
+
+  void _recordOp(int owner, Map<String, dynamic> action) {
+    final fp = '$owner|${_opSig(action)}|${_boardHash()}';
+    final n = (_opHistory[fp] ?? 0) + 1;
+    _opHistory[fp] = n;
+    if (n >= 3) {
+      winner = 1 - owner;
+      log.add('玩家$owner重复完全相同操作三次（循环），判负');
+    }
+  }
+
   // ── 统一入口 ──
   Map<String, dynamic> applyAction(int owner, Map<String, dynamic> action, {bool deferRoll = false}) {
     if (winner != null) return {'ok': false, 'reason': '游戏已结束'};
@@ -745,6 +789,7 @@ class AimGame {
         }
         points--;
         checkWin();
+        if (winner == null) _recordOp(owner, action); // 重复操作三次判负（象棋式）
         maybeAutoEnd();
         return {'ok': true};
       case 'attack':
@@ -754,6 +799,7 @@ class AimGame {
         }
         points--;
         checkWin();
+        if (winner == null) _recordOp(owner, action); // 重复操作三次判负（象棋式）
         maybeAutoEnd();
         return {'ok': true};
       case 'split':
@@ -763,6 +809,7 @@ class AimGame {
         }
         points--;
         checkWin();
+        if (winner == null) _recordOp(owner, action); // 重复操作三次判负（象棋式）
         maybeAutoEnd();
         return {'ok': true};
       case 'devour':
@@ -772,6 +819,7 @@ class AimGame {
         }
         points--;
         checkWin();
+        if (winner == null) _recordOp(owner, action); // 重复操作三次判负（象棋式）
         maybeAutoEnd();
         return {'ok': true};
       case 'produce':
@@ -779,6 +827,7 @@ class AimGame {
         if (!doProduce(owner, (action['i'] as num).toInt())) return {'ok': false, 'reason': '造兵不合法'};
         produceLeft--;
         checkWin();
+        if (winner == null) _recordOp(owner, action); // 重复操作三次判负（象棋式）
         maybeAutoEnd();
         return {'ok': true};
       case 'endTurn':

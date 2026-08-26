@@ -1,8 +1,8 @@
 // AIM 服务端配置
 'use strict';
 module.exports = {
-  APP_VERSION: '1.1.0',
-  APP_VERSION_CODE: 4,
+  APP_VERSION: '1.2.0',
+  APP_VERSION_CODE: 5,
   // ── 服务器自身信息（目录注册用）──
   SERVER_NAME: 'AIM 官方服',
   SERVER_MAX_PLAYERS: 20,      // 服务器同时在线人数上限（小破服务器保护）
