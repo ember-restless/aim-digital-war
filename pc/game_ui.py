@@ -83,6 +83,8 @@ class GameUI:
         self.anim = None         # 当前动画 {type, t0, dur, ...}
         self.anim_lock = False
         self.over_panel = None   # 结算数据
+        self.warn_msg = None     # 浮动警告（重复操作提示等）
+        self.warn_t0 = 0.0
         self.exit_request = False
         self.bgm_which = 'battle'
         # ── 定时 ──
@@ -177,6 +179,10 @@ class GameUI:
         r = self.game.apply_action(self.game.turn, action, defer_roll=True)
         if not r.get('ok'):
             return False
+        if r.get('repeatWarn'):
+            # 第 2 次重复：提示「再重复一次将判负」（象棋式规则）
+            self.warn_msg = '⚠ 再重复一次相同操作将直接判负！'
+            self.warn_t0 = time.time()
         self._refresh_log()
         # 音效/语音
         self._play_action_fx(action)
@@ -524,6 +530,7 @@ class GameUI:
         self._draw_interaction(rects)
         self._draw_action_panel(rects)
         self._draw_log()
+        self._draw_warn()
         if self.game.winner is not None and self.over_panel:
             self._draw_over()
         elif self.anim_lock is False and self.game.winner is None:
@@ -919,6 +926,25 @@ class GameUI:
             self.screen.blit(t, (24, yy))
             yy += 16
 
+    def _draw_warn(self):
+        # 浮动警告（重复操作第 2 次提示），显示 3 秒淡出
+        if not self.warn_msg:
+            return
+        elap = time.time() - self.warn_t0
+        if elap > 3.2:
+            self.warn_msg = None
+            return
+        alpha = 255 if elap < 2.5 else max(0, int(255 * (3.2 - elap) / 0.7))
+        f = _font(18)
+        t = f.render(self.warn_msg, True, (255, 120, 110))
+        t.set_alpha(alpha)
+        x = (self.w - t.get_width()) // 2
+        pygame.draw.rect(self.screen, (30, 12, 12), (x - 16, 118, t.get_width() + 32, t.get_height() + 12),
+                         border_radius=6)
+        pygame.draw.rect(self.screen, (140, 60, 55), (x - 16, 118, t.get_width() + 32, t.get_height() + 12), 1,
+                         border_radius=6)
+        self.screen.blit(t, (x, 124))
+
     def _draw_hint(self):
         if self.game.winner is not None:
             return
@@ -940,7 +966,7 @@ class GameUI:
         self._over_t0 = time.time()
 
     def _over_sub_reason(self):
-        """从对局 log 推导判负原因（重复操作/死局/掉线），无则空串（默认数字和归零）。"""
+        """从对局 log 推导判负原因（重复操作/死局/只剩滚木/掉线），无则空串（默认数字和归零）。"""
         if not self.game.log:
             return ''
         last = self.game.log[-1]
@@ -948,6 +974,8 @@ class GameUI:
             return '重复完全相同操作三次（循环），判负'
         if '无任何可执行行动' in last:
             return '无任何可执行行动，判负'
+        if '只剩滚木' in last:
+            return '只剩滚木，无法行动，判负'
         if '掉线' in last:
             return last
         return ''

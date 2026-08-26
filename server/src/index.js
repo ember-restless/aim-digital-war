@@ -306,6 +306,10 @@ io.on('connection', (socket) => {
       socket.emit('error', { msg: res.reason });
       return;
     }
+    if (res.repeatWarn) {
+      // 第 2 次重复：提示该玩家「再重复一次将判负」（象棋式规则）
+      socket.emit('repeat_warn', {});
+    }
     broadcastGame(room);
     if (room.status === 'ended') {
       for (const p of room.players) {

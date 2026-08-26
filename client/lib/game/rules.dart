@@ -80,6 +80,7 @@ class AimGame {
   // ── 重复操作判负（象棋式「三次重复」，牢大定）──
   // 指纹 = 玩家 | 操作签名 | 操作后棋盘快照；同一指纹第 3 次出现 → 制造循环者判负
   Map<String, int> _opHistory = {};
+  bool _lastOpRepeatWarn = false; // 本次操作是否触发了第 2 次重复警告（applyAction 返回给 UI）
 
   List<int> _statsList(String key) => (stats[key] as List).cast<int>();
 
@@ -720,6 +721,14 @@ class AimGame {
       if (sumOf(o) == 0) {
         winner = 1 - o;
         log.add('玩家${1 - o}获胜！');
+        continue;
+      }
+      // 只剩激活滚木（无任何可操控单位）→ 直接判负（牢大定）
+      final hasControllable =
+          cells.any((c) => isOwnedUnit(c, o) && !(c.v == 6 && c.auto));
+      if (!hasControllable) {
+        winner = 1 - o;
+        log.add('玩家$o只剩滚木，无法行动，判负');
       }
     }
   }
@@ -754,14 +763,22 @@ class AimGame {
     }
   }
 
-  void _recordOp(int owner, Map<String, dynamic> action) {
+  int _recordOp(int owner, Map<String, dynamic> action) {
     final fp = '$owner|${_opSig(action)}|${_boardHash()}';
     final n = (_opHistory[fp] ?? 0) + 1;
     _opHistory[fp] = n;
     if (n >= 3) {
       winner = 1 - owner;
       log.add('玩家$owner重复完全相同操作三次（循环），判负');
+      _lastOpRepeatWarn = false;
+    } else if (n == 2) {
+      // 第二次重复：提示「再重复一次就判负」（牢大定）
+      _lastOpRepeatWarn = true;
+      log.add('玩家$owner注意：再重复一次相同操作将直接判负');
+    } else {
+      _lastOpRepeatWarn = false;
     }
+    return n;
   }
 
   // ── 统一入口 ──
@@ -791,7 +808,7 @@ class AimGame {
         checkWin();
         if (winner == null) _recordOp(owner, action); // 重复操作三次判负（象棋式）
         maybeAutoEnd();
-        return {'ok': true};
+        return {'ok': true, 'repeatWarn': _lastOpRepeatWarn};
       case 'attack':
         if (phase != 'action' || points <= 0) return {'ok': false, 'reason': '非行动阶段'};
         if (!doAttack(owner, (action['i'] as num).toInt(), (action['j'] as num).toInt())) {
@@ -801,7 +818,7 @@ class AimGame {
         checkWin();
         if (winner == null) _recordOp(owner, action); // 重复操作三次判负（象棋式）
         maybeAutoEnd();
-        return {'ok': true};
+        return {'ok': true, 'repeatWarn': _lastOpRepeatWarn};
       case 'split':
         if (phase != 'action' || points <= 0) return {'ok': false, 'reason': '非行动阶段'};
         if (!doSplit(owner, (action['i'] as num).toInt(), (action['keep'] as num?)?.toInt() ?? 0)) {
@@ -811,7 +828,7 @@ class AimGame {
         checkWin();
         if (winner == null) _recordOp(owner, action); // 重复操作三次判负（象棋式）
         maybeAutoEnd();
-        return {'ok': true};
+        return {'ok': true, 'repeatWarn': _lastOpRepeatWarn};
       case 'devour':
         if (phase != 'action' || points <= 0) return {'ok': false, 'reason': '非行动阶段'};
         if (!doDevour(owner, (action['i'] as num).toInt(), (action['j'] as num).toInt())) {
@@ -821,7 +838,7 @@ class AimGame {
         checkWin();
         if (winner == null) _recordOp(owner, action); // 重复操作三次判负（象棋式）
         maybeAutoEnd();
-        return {'ok': true};
+        return {'ok': true, 'repeatWarn': _lastOpRepeatWarn};
       case 'produce':
         if (phase != 'produce' || produceLeft <= 0) return {'ok': false, 'reason': '非造兵阶段'};
         if (!doProduce(owner, (action['i'] as num).toInt())) return {'ok': false, 'reason': '造兵不合法'};
@@ -829,7 +846,7 @@ class AimGame {
         checkWin();
         if (winner == null) _recordOp(owner, action); // 重复操作三次判负（象棋式）
         maybeAutoEnd();
-        return {'ok': true};
+        return {'ok': true, 'repeatWarn': _lastOpRepeatWarn};
       case 'endTurn':
         if (phase == 'action' && points > 0) return {'ok': false, 'reason': '行动点未耗尽，不能结束回合'};
         if (phase == 'produce' && produceLeft > 0) return {'ok': false, 'reason': '造兵点未耗尽，不能结束回合'};

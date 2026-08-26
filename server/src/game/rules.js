@@ -713,6 +713,14 @@ function checkWin(state) {
     if (sumOf(state, o) === 0) {
       state.winner = 1 - o;
       state.log.push(`玩家${1 - o}获胜！`);
+      continue;
+    }
+    // 只剩激活滚木（无任何可操控单位）→ 直接判负（牢大定）
+    const hasControllable = state.map.cells.some(
+      (c) => isOwnedUnit(c, o) && !(c.v === 6 && c.auto));
+    if (!hasControllable) {
+      state.winner = 1 - o;
+      state.log.push(`玩家${o}只剩滚木，无法行动，判负`);
     }
   }
 }
@@ -744,7 +752,11 @@ function recordOp(state, owner, action) {
   if (n >= 3) {
     state.winner = 1 - owner;
     state.log.push(`玩家${owner}重复完全相同操作三次（循环），判负`);
+  } else if (n === 2) {
+    // 第二次重复：提示「再重复一次就判负」（牢大定）
+    state.log.push(`玩家${owner}注意：再重复一次相同操作将直接判负`);
   }
+  return n;
 }
 
 // 统一入口：执行一个行动（支持自动选阶段 + 点数耗尽自动过回合）
@@ -767,45 +779,50 @@ function applyAction(state, owner, action, deferRoll) {
       if (!doMove(state, owner, action.i, action.steps)) return { ok: false, reason: '移动不合法' };
       state.points--;
       checkWin(state);
-      if (!state.winner) recordOp(state, owner, action); // 重复操作三次判负（象棋式）
+      let _rw = false;
+      if (!state.winner) _rw = recordOp(state, owner, action) === 2; // 重复操作三次判负（象棋式）
       maybeAutoEnd(state);
-      return { ok: true };
+      return { ok: true, repeatWarn: _rw };
     }
     case 'attack': {
       if (state.phase !== 'action' || state.points <= 0) return { ok: false, reason: '非行动阶段' };
       if (!doAttack(state, owner, action.i, action.j)) return { ok: false, reason: '攻击不合法' };
       state.points--;
       checkWin(state);
-      if (!state.winner) recordOp(state, owner, action); // 重复操作三次判负（象棋式）
+      let _rw = false;
+      if (!state.winner) _rw = recordOp(state, owner, action) === 2; // 重复操作三次判负（象棋式）
       maybeAutoEnd(state);
-      return { ok: true };
+      return { ok: true, repeatWarn: _rw };
     }
     case 'split': {
       if (state.phase !== 'action' || state.points <= 0) return { ok: false, reason: '非行动阶段' };
       if (!doSplit(state, owner, action.i, action.keep)) return { ok: false, reason: '拆分不合法' };
       state.points--;
       checkWin(state);
-      if (!state.winner) recordOp(state, owner, action); // 重复操作三次判负（象棋式）
+      let _rw = false;
+      if (!state.winner) _rw = recordOp(state, owner, action) === 2; // 重复操作三次判负（象棋式）
       maybeAutoEnd(state);
-      return { ok: true };
+      return { ok: true, repeatWarn: _rw };
     }
     case 'devour': {
       if (state.phase !== 'action' || state.points <= 0) return { ok: false, reason: '非行动阶段' };
       if (!doDevour(state, owner, action.i, action.j)) return { ok: false, reason: '吞噬不合法' };
       state.points--;
       checkWin(state);
-      if (!state.winner) recordOp(state, owner, action); // 重复操作三次判负（象棋式）
+      let _rw = false;
+      if (!state.winner) _rw = recordOp(state, owner, action) === 2; // 重复操作三次判负（象棋式）
       maybeAutoEnd(state);
-      return { ok: true };
+      return { ok: true, repeatWarn: _rw };
     }
     case 'produce': {
       if (state.phase !== 'produce' || state.produceLeft <= 0) return { ok: false, reason: '非造兵阶段' };
       if (!doProduce(state, owner, action.i)) return { ok: false, reason: '造兵不合法' };
       state.produceLeft--;
       checkWin(state);
-      if (!state.winner) recordOp(state, owner, action); // 重复操作三次判负（象棋式）
+      let _rw = false;
+      if (!state.winner) _rw = recordOp(state, owner, action) === 2; // 重复操作三次判负（象棋式）
       maybeAutoEnd(state);
-      return { ok: true };
+      return { ok: true, repeatWarn: _rw };
     }
     case 'endTurn':
       if (state.phase === 'action' && state.points > 0) return { ok: false, reason: '行动点未耗尽，不能结束回合' };

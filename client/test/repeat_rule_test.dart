@@ -81,4 +81,38 @@ void main() {
     g.applyAction(0, {'type': 'attack', 'i': 4, 'j': 6});
     expect(g.winner, 1);
   });
+
+  test('第 2 次重复返回 repeatWarn 提示，第 3 次才判负', () {
+    final g = custom(['[8]', '0', '0', '0', '[3]', '0', '{2}', '{8}']);
+    final r1 = g.applyAction(0, {'type': 'attack', 'i': 4, 'j': 6});
+    expect(r1['repeatWarn'], isNot(true), reason: '第 1 次不该警告');
+    g.applyAction(1, {'type': 'produce', 'i': 7});
+    final r2 = g.applyAction(0, {'type': 'attack', 'i': 4, 'j': 6});
+    expect(r2['repeatWarn'], true, reason: '第 2 次应返回警告');
+    expect(g.winner, isNull, reason: '第 2 次不该判负');
+    expect(g.log.any((l) => l.contains('再重复一次')), true, reason: 'log 应有警告');
+    g.applyAction(1, {'type': 'produce', 'i': 7});
+    g.applyAction(0, {'type': 'attack', 'i': 4, 'j': 6});
+    expect(g.winner, 1, reason: '第 3 次判负');
+  });
+
+  test('只剩激活滚木直接判负', () {
+    // 玩家0 基地被清掉，只剩激活滚木 6（放 1 号位，远离玩家1基地@7）
+    final g = custom(['[8]', '[6]', '0', '0', '0', '0', '0', '{8}']);
+    g.cells[0] = AimCell(0); // 清掉玩家0基地
+    g.cells[1] = AimCell(6, o: 0, auto: true); // 激活滚木
+    g.turn = 1;
+    final r = g.applyAction(1, {'type': 'produce', 'i': 7});
+    expect(r['ok'], true, reason: r['reason']);
+    expect(g.winner, 1, reason: '玩家0 只剩滚木应判负');
+    expect(g.log.any((l) => l.contains('只剩滚木')), true);
+  });
+
+  test('有可控单位（基地/兵）不判负', () {
+    final g = custom(['[8]', '0', '0', '0', '0', '0', '0', '{8}']);
+    g.cells[1] = AimCell(6, o: 0, auto: true); // 有滚木也有基地
+    g.turn = 1;
+    g.applyAction(1, {'type': 'produce', 'i': 7});
+    expect(g.winner, isNull);
+  });
 }

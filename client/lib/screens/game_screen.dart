@@ -219,6 +219,20 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     _pushChat('${m['name']}：${m['msg']}');
   }
 
+  // 重复操作警告：第 2 次重复后提示「再重复一次将判负」（联机由服务端 repeat_warn 事件触发，
+  // 本地/热座由 socket 层转发，见 local_socket / lan_server_io）
+  void _showRepeatWarn() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: const Text('⚠ 再重复一次相同操作将直接判负！'),
+        backgroundColor: const Color(0xFF8C2F2F),
+        duration: const Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+      ));
+  }
+
   void _pushChat(String text) {
     _chatMsgs.add((text: text, until: DateTime.now().millisecondsSinceEpoch + 3500));
     while (_chatMsgs.length > 4) _chatMsgs.removeAt(0);
@@ -288,6 +302,7 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     widget.socket.onEvent = (event, data) {
       prev?.call(event, data);
       if (event == 'ingame_chat') _handleInGameChat(data);
+      if (event == 'repeat_warn') _showRepeatWarn();
     };
     // 对战：战斗 BGM
     BgmManager.instance.playBattle();
@@ -1879,13 +1894,14 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
     );
   }
 
-  // 从对局 log 推导判负原因（重复操作/死局/掉线），无则空串（默认数字和归零）
+  // 从对局 log 推导判负原因（重复操作/死局/只剩滚木/掉线），无则空串（默认数字和归零）
   String _overSubReason(dynamic s) {
     final log = (s['log'] as List?) ?? [];
     if (log.isEmpty) return '';
     final last = log.last.toString();
     if (last.contains('重复完全相同操作三次')) return '重复完全相同操作三次（循环），判负';
     if (last.contains('无任何可执行行动')) return '无任何可执行行动，判负';
+    if (last.contains('只剩滚木')) return '只剩滚木，无法行动，判负';
     if (last.contains('掉线')) return last;
     return '';
   }

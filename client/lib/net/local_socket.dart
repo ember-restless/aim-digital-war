@@ -80,6 +80,10 @@ class LocalAimSocket extends AIMSocket {
         onServerError?.call(res['reason']?.toString() ?? '操作不合法');
         return;
       }
+      if (res['repeatWarn'] == true) {
+        // 第 2 次重复：提示「再重复一次将判负」
+        onEvent?.call('repeat_warn', null);
+      }
       if (action['type'] == 'endTurn' && game.hasPendingRoll) {
         // 滚木待滚：推未滚的棋盘，等 GameScreen 逐步驱动
         _pushState();

@@ -79,6 +79,7 @@ class AimGame:
         # ── 重复操作判负（象棋式「三次重复」，牢大定）──
         # 指纹 = 玩家 | 操作签名 | 操作后棋盘快照；同一指纹第 3 次出现 → 制造循环者判负
         self._op_history = {}
+        self._last_op_repeat_warn = False  # 本次操作是否触发第 2 次重复警告
 
     # ── 基础 ──
     def dir_of(self, owner):
@@ -641,6 +642,14 @@ class AimGame:
             if self.sum_of(o) == 0:
                 self.winner = 1 - o
                 self.log.append(f'玩家{1 - o}获胜！')
+                continue
+            # 只剩激活滚木（无任何可操控单位）→ 直接判负（牢大定）
+            has_controllable = any(
+                self.is_owned_unit(c, o) and not (c.v == 6 and c.auto)
+                for c in self.cells)
+            if not has_controllable:
+                self.winner = 1 - o
+                self.log.append(f'玩家{o}只剩滚木，无法行动，判负')
 
     # ── 重复操作判负（象棋式「三次重复」，与 server rules.js 逐行对应）──
     def _board_hash(self):
@@ -672,6 +681,14 @@ class AimGame:
         if n >= 3:
             self.winner = 1 - owner
             self.log.append(f'玩家{owner}重复完全相同操作三次（循环），判负')
+            self._last_op_repeat_warn = False
+        elif n == 2:
+            # 第二次重复：提示「再重复一次就判负」（牢大定）
+            self._last_op_repeat_warn = True
+            self.log.append(f'玩家{owner}注意：再重复一次相同操作将直接判负')
+        else:
+            self._last_op_repeat_warn = False
+        return n
 
     # ── 统一入口 ──
     def apply_action(self, owner, action, defer_roll=False):
@@ -700,6 +717,7 @@ class AimGame:
             if self.winner is None:
                 self._record_op(owner, action)  # 重复操作三次判负（象棋式）
             self.maybe_auto_end()
+            return {'ok': True, 'repeatWarn': self._last_op_repeat_warn}
             return {'ok': True}
         if t == 'attack':
             if self.phase != 'action' or self.points <= 0:
@@ -711,6 +729,7 @@ class AimGame:
             if self.winner is None:
                 self._record_op(owner, action)  # 重复操作三次判负（象棋式）
             self.maybe_auto_end()
+            return {'ok': True, 'repeatWarn': self._last_op_repeat_warn}
             return {'ok': True}
         if t == 'split':
             if self.phase != 'action' or self.points <= 0:
@@ -722,6 +741,7 @@ class AimGame:
             if self.winner is None:
                 self._record_op(owner, action)  # 重复操作三次判负（象棋式）
             self.maybe_auto_end()
+            return {'ok': True, 'repeatWarn': self._last_op_repeat_warn}
             return {'ok': True}
         if t == 'devour':
             if self.phase != 'action' or self.points <= 0:
@@ -733,6 +753,7 @@ class AimGame:
             if self.winner is None:
                 self._record_op(owner, action)  # 重复操作三次判负（象棋式）
             self.maybe_auto_end()
+            return {'ok': True, 'repeatWarn': self._last_op_repeat_warn}
             return {'ok': True}
         if t == 'produce':
             if self.phase != 'produce' or self.produce_left <= 0:
@@ -744,6 +765,7 @@ class AimGame:
             if self.winner is None:
                 self._record_op(owner, action)  # 重复操作三次判负（象棋式）
             self.maybe_auto_end()
+            return {'ok': True, 'repeatWarn': self._last_op_repeat_warn}
             return {'ok': True}
         if t == 'endTurn':
             if self.phase == 'action' and self.points > 0:

@@ -559,7 +559,7 @@ class Menu:
             b.draw(self.screen)
         # ── 底栏 ──
         fb = _font(12)
-        t = fb.render('AIM 1.2.0 · 数字大战', True, DIM)
+        t = fb.render('AIM 1.2.1 · 数字大战', True, DIM)
         self.screen.blit(t, (20, H - 26))
 
     def _draw_seal(self, x, y):

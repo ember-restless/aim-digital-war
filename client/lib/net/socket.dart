@@ -26,6 +26,7 @@ class AIMSocket {
     _socket!.on('room_list', (d) => onEvent?.call('room_list', d));
     _socket!.on('game_state', (d) => onEvent?.call('game_state', d));
     _socket!.on('game_over', (d) => onEvent?.call('game_over', d));
+    _socket!.on('repeat_warn', (d) => onEvent?.call('repeat_warn', d));
     _socket!.on('chat', (d) => onEvent?.call('chat', d));
     _socket!.on('ingame_chat', (d) => onEvent?.call('ingame_chat', d));
     _socket!.on('error', (d) => onServerError?.call((d as Map?)?['msg']?.toString() ?? '错误'));

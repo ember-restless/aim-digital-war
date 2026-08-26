@@ -295,6 +295,10 @@ class LanServer {
           _send(ws, 'error', {'msg': res['reason']?.toString() ?? '操作不合法'});
           return;
         }
+        if (res['repeatWarn'] == true) {
+          // 第 2 次重复：提示「再重复一次将判负」
+          _send(ws, 'repeat_warn', {});
+        }
         _broadcastGame();
         break;
       case 'roll_step':
