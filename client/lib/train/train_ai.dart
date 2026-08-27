@@ -19,8 +19,9 @@ class TrainAi {
   int? _version;
   AimAi? _fallback;
   final math.Random _rand = math.Random();
+  final bool explore; // 小概率随机探索（保持训练数据多样性）；测试传 false
 
-  TrainAi({AiLevel fallback = AiLevel.hard}) {
+  TrainAi({AiLevel fallback = AiLevel.hard, this.explore = true}) {
     _fallback = AimAi(fallback);
   }
 
@@ -87,8 +88,9 @@ class TrainAi {
     Map<String, dynamic>? bestAct;
     final cands = <Map<String, dynamic>>[];
     final temps = <double>[];
+    final flip = game.turn == 1; // 我方在右 → 槽位镜像
     for (final a in playable) {
-      final slot = _actionSlot(a);
+      final slot = _actionSlot(a, flip);
       if (slot == null || slot >= logits.length) continue;
       final s = logits[slot];
       if (s > best) {
@@ -99,7 +101,7 @@ class TrainAi {
       temps.add(s);
     }
     // 小概率探索（0.08）随机选合法行动，保持数据多样性
-    if (_rand.nextDouble() < 0.08 && cands.isNotEmpty) {
+    if (explore && _rand.nextDouble() < 0.08 && cands.isNotEmpty) {
       return cands[_rand.nextInt(cands.length)];
     }
     return bestAct ?? playable.first;
@@ -137,18 +139,22 @@ class TrainAi {
     return out;
   }
 
-  // ── 状态编码：53 维 ──
+  // ── 状态编码：53 维（视角归一化——统一为「我方在左」，左右对称）──
+  // 我方 = game.turn；若我方在右（turn==1）→ 逆序读格子，让模型看到的永远是「我方在左」的棋盘
   List<double> _encode(AimGame game) {
+    final me = game.turn;
+    final flip = me == 1; // 我方在右 → 翻成左视角
+    final cells = flip ? game.cells.reversed.toList() : game.cells;
     final x = <double>[];
-    for (final c in game.cells) {
+    for (final c in cells) {
       x.add(c.v / 9.0);
-      x.add(c.o == 0 ? 1.0 : 0.0);
-      x.add(c.o == 1 ? 1.0 : 0.0);
+      x.add(c.o == me ? 1.0 : 0.0);
+      x.add(c.o != null && c.o != me ? 1.0 : 0.0);
       x.add(c.bridge ? 1.0 : 0.0);
       x.add(c.onBridge ? 1.0 : 0.0);
       x.add(c.auto ? 1.0 : 0.0);
     }
-    x.add(game.turn.toDouble());
+    x.add(0.0); // 归一化视角下我方恒为玩家0（turn）
     x.add(game.phase == 'action' ? 1.0 : 0.0);
     x.add(game.phase == 'produce' ? 1.0 : 0.0);
     x.add(game.points / 10.0);
@@ -156,11 +162,12 @@ class TrainAi {
     return x;
   }
 
-  // ── 动作 → 槽位（49）──
-  int? _actionSlot(Map<String, dynamic> a) {
+  // ── 动作 → 槽位（49，视角归一化：翻转时格子索引镜像）──
+  int? _actionSlot(Map<String, dynamic> a, bool flip) {
     final t = a['type'] as String?;
-    final i = a['i'] is num ? (a['i'] as num).toInt() : -1;
+    var i = a['i'] is num ? (a['i'] as num).toInt() : -1;
     if (i < 0 || i >= 8) return null;
+    if (flip) i = 7 - i; // 我方在右：棋盘镜像，格子索引翻转
     switch (t) {
       case 'move':
         final steps = a['steps'] is num ? (a['steps'] as num).toInt() : 1;

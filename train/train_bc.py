@@ -59,11 +59,28 @@ def rebuild(step, limit):
     g.produce_left = int(step.get('produceLeft', 0))
     return g
 
-def action_slot(action):
+def normalize_view(g, owner):
+    """视角归一化：人类（owner）恒为玩家0（左方）——若 owner==1 则镜像棋盘+重标+turn=0。
+    返回是否发生了翻转（动作槽位的格子索引也要镜像）。"""
+    if owner == 0:
+        return False
+    # 镜像棋盘：左右翻转
+    g.cells = list(reversed(g.cells))
+    for c in g.cells:
+        if c.o == 0:
+            c.o = 1
+        elif c.o == 1:
+            c.o = 0
+    g.turn = 0
+    return True
+
+def action_slot(action, flip=False):
     t = action.get('type')
     i = int(action.get('i', -1))
     if i < 0 or i >= MAX_CELLS:
         return None
+    if flip:
+        i = MAX_CELLS - 1 - i  # 镜像：格子索引翻转
     if t == 'move':
         steps = int(action.get('steps', 1))
         return i * 6 + (1 if steps >= 2 else 0)
@@ -119,10 +136,12 @@ def build_samples(games):
             if not playable:
                 no_legal += 1
                 continue
+            # 视角归一化：人类（owner）恒为左方（玩家0）；人类在右则镜像棋盘
+            flip = normalize_view(g, owner)
             slot = None
             for a in playable:
                 if core_eq(a, action):
-                    slot = action_slot(a)
+                    slot = action_slot(a, flip)
                     break
             if slot is None:
                 not_found += 1

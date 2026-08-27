@@ -19,29 +19,32 @@ import 'socket.dart';
 class LocalAimSocket extends AIMSocket {
   AimGame game;
   final int limit;
-  final AiLevel? aiLevel; // null=双人；非 null=玩家0 vs AI（AI 是玩家1）
+  final AiLevel? aiLevel; // null=双人；非 null=玩家 vs AI
+  final int humanSide; // 人类所在侧（0=左，1=右）；AI 在另一侧
   bool _started = false;
   bool _disposed = false;
   bool _aiThinking = false;
   int _aiSeq = 0;
-  // ── 训练场记录模式：记录人类（玩家0）每步操作供行为克隆训练 ──
+  // ── 训练场记录模式：记录人类每步操作供行为克隆训练 ──
   bool recordMode = false;
   List<Map<String, dynamic>> humanSteps = [];
   // AI 决策可插拔（训练场用 TrainAi；空则用 aiLevel 的 AimAi）
   Map<String, dynamic>? Function(AimGame game)? aiDecider;
   void Function(Map<String, dynamic> gameData)? onGameRecorded;
 
-  LocalAimSocket({this.limit = 16, bool allowOwnRollerAttack = true, this.aiLevel})
+  LocalAimSocket({this.limit = 16, bool allowOwnRollerAttack = true, this.aiLevel, this.humanSide = 0})
       : game = AimGame(limit: limit, allowOwnRollerAttack: allowOwnRollerAttack),
         super('local://hotseat');
+
+  int get aiSide => 1 - humanSide;
 
   @override
   bool get connected => true;
 
   @override
   void connect() {
-    // 本地无连接：直接开局，推第一视角（玩家0 先手）
-    onEvent?.call('game_state', game.viewFor(0));
+    // 本地无连接：直接开局，推人类视角
+    onEvent?.call('game_state', game.viewFor(humanSide));
   }
 
   void _pushState() {
@@ -61,7 +64,7 @@ class LocalAimSocket extends AIMSocket {
         humanSteps = [];
       }
     }
-    onEvent?.call('game_state', game.viewFor(game.turn));
+    onEvent?.call('game_state', game.viewFor(humanSide));
     _maybeDriveAi();
   }
 
@@ -70,7 +73,7 @@ class LocalAimSocket extends AIMSocket {
     if (aiLevel == null && aiDecider == null) return;
     if (_disposed) return;
     if (game.winner != null) return;
-    if (game.turn != 1) return; // AI 固定玩家1
+    if (game.turn != aiSide) return; // AI 在人类对面
     if (_aiThinking) return;
     _aiThinking = true;
     final mySeq = ++_aiSeq;
@@ -86,7 +89,7 @@ class LocalAimSocket extends AIMSocket {
     });
   }
 
-  // 记录人类（玩家0）一步：applyAction 成功后调用（状态为操作前快照）
+  // 记录人类一步：applyAction 成功后调用（状态为操作前快照）
   void _recordHumanStep(Map<String, dynamic> action, int snapTurn, String? snapPhase,
       int snapPoints, int snapProduce) {
     humanSteps.add({
@@ -96,7 +99,7 @@ class LocalAimSocket extends AIMSocket {
       'points': snapPoints,
       'produceLeft': snapProduce,
       'action': action,
-      'owner': 0,
+      'owner': humanSide,
     });
   }
 
@@ -105,8 +108,8 @@ class LocalAimSocket extends AIMSocket {
     if (event == 'action') {
       if (game.winner != null) return;
       final action = (data as Map).cast<String, dynamic>();
-      // 记录模式：操作前快照（人类回合 = 玩家0）
-      final rec = recordMode && game.turn == 0;
+      // 记录模式：操作前快照（人类回合）
+      final rec = recordMode && game.turn == humanSide;
       final snapTurn = game.turn, snapPhase = game.phase;
       final snapPoints = game.points, snapProduce = game.produceLeft;
       // endTurn 延后滚木（deferRoll），由 roll_step 逐步驱动——规则算一步，动画播一步

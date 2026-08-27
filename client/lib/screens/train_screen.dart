@@ -42,6 +42,7 @@ class _TrainScreenState extends State<TrainScreen> {
   int _modelVersion = 0;
   bool _training = false;
   Timer? _statsTimer;
+  int _humanSide = 0; // 人类所在侧（0=左，1=右），每局翻转
 
   @override
   void initState() {
@@ -59,7 +60,7 @@ class _TrainScreenState extends State<TrainScreen> {
   }
 
   void _newGame() {
-    socket = LocalAimSocket(limit: 16, aiLevel: AiLevel.hard);
+    socket = LocalAimSocket(limit: 16, aiLevel: AiLevel.hard, humanSide: _humanSide);
     socket.recordMode = true;
     socket.aiDecider = trainAi.hasModel ? trainAi.decide : null;
     socket.onEvent = (event, data) {
@@ -68,6 +69,8 @@ class _TrainScreenState extends State<TrainScreen> {
         setState(() => gameState = data);
       } else if (event == 'game_over') {
         setState(() => gameOver = data);
+        // 本局结束，下一局换边（左右交替，AI 双向学习）
+        _humanSide = 1 - _humanSide;
       }
     };
     socket.onServerError = (msg) {
@@ -191,6 +194,8 @@ class _TrainScreenState extends State<TrainScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Row(children: [
         _pt('🧪 训练场', 14, _signal, bold: true),
+        const SizedBox(width: 10),
+        _pt('本局你：${_humanSide == 0 ? '左方' : '右方'}', 12, _paper),
         const SizedBox(width: 14),
         _pt('局数 $_games', 12, _paper),
         const SizedBox(width: 12),
