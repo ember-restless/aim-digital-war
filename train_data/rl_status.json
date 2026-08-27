@@ -1,1 +1,1 @@
-{"state": "stopped", "games": 700, "avgReward": 0.175, "score": 45.1, "grade": "C", "baseWinRate": 0.12, "baseScore": 45.1, "targetGames": 700, "temp": 2.5, "ts": "2026-08-27 18:14:32"}
+{"state": "running", "games": 40, "avgReward": 0.187, "rlVersion": 15, "baseVersion": 102, "baseWinRate": 0.12, "baseScore": 45.1, "ts": "2026-08-27 18:36:24"}

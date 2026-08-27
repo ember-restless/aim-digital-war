@@ -549,6 +549,17 @@ def main():
             base_score = json.load(open(EVAL_FILE, encoding='utf-8')).get('score', {}).get('total')
     except Exception:
         pass
+    # 用当前 base 权重实时评估一次——确保基准线与实际 warm start 权重一致。
+    # 否则 train_weights.json 可能已被重新部署/重评估，启动快照的 baseScore 会失真。
+    try:
+        from eval_model import run_eval
+        data = run_eval(BC_WEIGHTS, EVAL_SPEC)
+        if data:
+            base_score = data['score']['total']
+            base_wr = data['summary'].get('vsHard')
+            print(f'实时基准评估: 原模型综合分 {base_score}（{data["score"]["grade"]}） vsHard {base_wr}', flush=True)
+    except Exception as e:
+        print(f'实时基准评估失败（用缓存值）: {e}', flush=True)
     print(f'原模型 vs hard 基准胜率: {base_wr}  综合评分: {base_score}', flush=True)
 
     while True:
