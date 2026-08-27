@@ -1,0 +1,63 @@
+{
+ "ts": "2026-08-27 13:32:50",
+ "modelVersion": 6,
+ "totalGames": 32,
+ "results": [
+  {
+   "opponent": "easy",
+   "side": 0,
+   "games": 4,
+   "wins": 3,
+   "winRate": 0.75,
+   "avgTurns": 35.8
+  },
+  {
+   "opponent": "easy",
+   "side": 1,
+   "games": 4,
+   "wins": 2,
+   "winRate": 0.5,
+   "avgTurns": 42.8
+  },
+  {
+   "opponent": "normal",
+   "side": 0,
+   "games": 4,
+   "wins": 0,
+   "winRate": 0.0,
+   "avgTurns": 24.0
+  },
+  {
+   "opponent": "normal",
+   "side": 1,
+   "games": 4,
+   "wins": 1,
+   "winRate": 0.25,
+   "avgTurns": 55.0
+  },
+  {
+   "opponent": "hard",
+   "side": 0,
+   "games": 8,
+   "wins": 1,
+   "winRate": 0.12,
+   "avgTurns": 23.8
+  },
+  {
+   "opponent": "hard",
+   "side": 1,
+   "games": 8,
+   "wins": 5,
+   "winRate": 0.62,
+   "avgTurns": 41.5
+  }
+ ],
+ "summary": {
+  "overall": 0.38,
+  "asLeft": 0.25,
+  "asRight": 0.5,
+  "vsEasy": 0.62,
+  "vsNormal": 0.12,
+  "vsHard": 0.38
+ }
+}

@@ -141,10 +141,11 @@ class TrainAi {
 
   // ── 状态编码：53 维（视角归一化——统一为「我方在左」，左右对称）──
   // 我方 = game.turn；若我方在右（turn==1）→ 逆序读格子，让模型看到的永远是「我方在左」的棋盘
+  // 格子数可能因插桥/吞噬变化，固定取前 8 格（与训练一致）
   List<double> _encode(AimGame game) {
     final me = game.turn;
     final flip = me == 1; // 我方在右 → 翻成左视角
-    final cells = flip ? game.cells.reversed.toList() : game.cells;
+    final cells = (flip ? game.cells.reversed.toList() : game.cells).take(8).toList();
     final x = <double>[];
     for (final c in cells) {
       x.add(c.v / 9.0);
@@ -153,6 +154,9 @@ class TrainAi {
       x.add(c.bridge ? 1.0 : 0.0);
       x.add(c.onBridge ? 1.0 : 0.0);
       x.add(c.auto ? 1.0 : 0.0);
+    }
+    while (x.length < 48) {
+      x.addAll([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]); // 格子不足 8 格补零
     }
     x.add(0.0); // 归一化视角下我方恒为玩家0（turn）
     x.add(game.phase == 'action' ? 1.0 : 0.0);

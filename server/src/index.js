@@ -40,7 +40,13 @@ function trainStats() {
       modelUpdatedAt = w.updatedAt || null;
     }
   } catch (_) {}
-  trainStatsCache = { games, steps, modelVersion, modelUpdatedAt, training, lastTrainAt };
+  // 模型实力评估结果（监视台展示：vs easy/normal/hard 胜率等）
+  let evalInfo = null;
+  try {
+    const ef = path.join(__dirname, '..', '..', 'train_data', 'eval_result.json');
+    if (fs.existsSync(ef)) evalInfo = JSON.parse(fs.readFileSync(ef, 'utf8'));
+  } catch (_) {}
+  trainStatsCache = { games, steps, modelVersion, modelUpdatedAt, training, evaluating, lastTrainAt, eval: evalInfo };
   return trainStatsCache;
 }
 
@@ -49,6 +55,7 @@ function trainStats() {
 const TRAIN_MIN_GAP = 30 * 1000; // 30s 最小间隔（防连续对局训练风暴）
 let training = false;
 let pendingTrain = false;
+let evaluating = false;
 let lastTrainAt = null;
 
 function triggerTrain() {
@@ -70,12 +77,38 @@ function triggerTrain() {
     lastTrainAt = Date.now();
     trainStatsCache = null; // 统计缓存失效（版本号已变）
     console.log(`[train] 训练结束 code=${code} 耗时=${((Date.now() - started) / 1000).toFixed(1)}s`);
+    // 训练部署完成 → 自动评估模型实力（新权重存在才评）
+    if (code === 0) triggerEval();
     if (pendingTrain) { pendingTrain = false; triggerTrain(); }
   });
   p.on('error', () => {
     try { fs.closeSync(out); } catch (_) {}
     training = false;
     lastTrainAt = Date.now();
+  });
+}
+
+// 模型实力评估：vs easy/normal/hard 各打几局（左右两侧），结果落盘 eval_result.json
+function triggerEval() {
+  if (evaluating) return;
+  const wf = path.join(DOWNLOAD_DIR, 'train_weights.json');
+  if (!fs.existsSync(wf)) return; // 无权重不评
+  evaluating = true;
+  const logPath = path.join(__dirname, '..', '..', 'train', 'train.log');
+  const out = fs.openSync(logPath, 'a');
+  const started = Date.now();
+  fs.writeSync(out, `\n===== 模型评估 ${new Date().toISOString()} =====\n`);
+  const p = spawn('python3', ['/root/aim/train/eval_model.py', '--games', 'easy=4,normal=4,hard=8'],
+    { cwd: '/root/aim', stdio: ['ignore', out, out] });
+  p.on('close', (code) => {
+    try { fs.closeSync(out); } catch (_) {}
+    evaluating = false;
+    trainStatsCache = null; // 评估结果缓存失效
+    console.log(`[eval] 评估结束 code=${code} 耗时=${((Date.now() - started) / 1000).toFixed(1)}s`);
+  });
+  p.on('error', () => {
+    try { fs.closeSync(out); } catch (_) {}
+    evaluating = false;
   });
 }
 

@@ -126,10 +126,19 @@ def build_samples(games):
             action = step.get('action')
             if not action:
                 continue
-            # 阶段选择（phase null）由启发式负责，不训练；只学已选阶段的行动/造兵
-            if step.get('phase') is None:
-                continue
             g = rebuild(step, game.get('limit'))
+            # 隐式选阶段：UI 直接发操作（不显式 emit choosePhase），操作前 phase 为 null——
+            # 按动作类型推断阶段，并用规则引擎重算行动点/造兵点（记录里是未初始化的 0）
+            if step.get('phase') is None:
+                t = action.get('type')
+                if t == 'produce':
+                    g.phase = 'produce'
+                    g.produce_left = g.count_of(owner, 8)
+                elif t in ('move', 'attack', 'devour', 'split'):
+                    g.phase = 'action'
+                    g.points = g.count_of(owner, 9) + 1
+                else:
+                    continue
             acts = g.get_legal_actions(owner)
             # 排除 endTurn（结束回合由游戏流程自动处理，不训练）
             playable = [a for a in acts if a['type'] != 'endTurn']
