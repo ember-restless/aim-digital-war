@@ -31,11 +31,28 @@ EVAL_FILE = os.path.join(BASE_DIR, 'train_data', 'eval_result.json')
 IN_DIM, HIDDEN, OUT = 53, 64, 97
 MAX_CELLS = 8
 GAMMA = 0.99
-LR = 1e-4
+LR = 5e-4              # 手写 SGD（无动量），比 1e-4 激进但仍在稳定区
+BATCH_GAMES = 32       # 每攒 N 局更新一次（≈1900 步样本/更新）
 SNAP_EVERY = 20       # 每 N 局快照一次对手
 EVAL_EVERY = 50       # 每 N 局评估一次 vs hard
 SAVE_EVERY = 20       # 每 N 局保存权重 + 心跳
 MAX_GUARD = 600       # 单局步数上限
+
+# ── 奖励塑形（针对 AIM 特殊性设计，非通用 RL 奖励）──
+# 胜负判据是 sum_of（双方所有单位数值总和，谁先归零谁输），所以核心信号用
+# 「战力差 Δ = 我方sum - 敌方sum」的每步变化：吞噬/击杀/造兵/产9/滚木碾人
+# 全部直接反映在 Δ 里，信号与胜负目标严格对齐。
+# 超9吞噬「变拉」（15→1+5=6）导致 sum 缩水，Δ 自动惩罚，无需硬编码禁招。
+R_DELTA = 0.25        # 战力差每变化 1 点
+R_KILL = 0.8          # 击杀敌方单位（Δ 之外的事件奖励）
+R_LOSS = -0.5         # 己方单位被灭
+R_DEVOUR_ENEMY = 2.0  # 吞噬敌方：吸收战力（Δ 已算 2v，这里再重点鼓励——修正「AI 不吞敌」）
+R_DEVOUR_SELF = -0.1  # 吞噬己方（合成 8/9 是运营核心，几乎不惩罚，交给 Δ 与远期收益）
+R_REPEAT_WARN = -0.6  # 第二次重复操作警告（第三次直接判负）
+R_WIN = 3.0           # 终局胜利
+R_LOSE = -3.0         # 终局失败
+DEVOUR_PRIOR = 3.0    # 吞敌槽探索先验（logit 偏置，仅训练期引导，参与更新可被拉回）
+EPS = 0.05            # ε 均匀探索：稀有合法动作（吞敌）也有公平机会被尝试
 
 
 def xavier(fan_in, fan_out, rng):
@@ -57,6 +74,12 @@ class RlPolicy:
             self.b2 = np.array(w['b2'], dtype=np.float64)
             self.wo = np.array(w['wo'], dtype=np.float64).reshape(OUT, HIDDEN)
             self.bo = np.array(w['bo'], dtype=np.float64)
+            # 吞敌先验：BC 权重里吞敌槽 logit 天生偏低（人类数据吞敌少），
+            # 给 8 个格子的「devour 敌」槽（i*12+8）加探索偏置，让 AI 敢于尝试吞敌。
+            # 这只是探索引导，不是硬编码——学成什么样完全由奖励塑形决定，
+            # 若吞敌真不好，梯度会把这个偏置拉回去（bo 参与更新）。
+            for i in range(MAX_CELLS):
+                self.bo[i * 12 + 8] += DEVOUR_PRIOR
             # 价值头：BC 权重没有 → 新初始化
             if 'wv' in w:
                 self.wv = np.array(w['wv'], dtype=np.float64).reshape(1, HIDDEN)
@@ -174,8 +197,15 @@ class RlPolicy:
         if sample:
             e = np.exp((logits - logits.max()) / temp)
             p = e / e.sum()
-            idx = self.rng.choice(len(cands), p=p)
-            lp = float(np.log(p[idx] + 1e-12))
+            n = len(cands)
+            if self.rng.random() < EPS:
+                # ε 均匀探索：给稀有合法动作（如吞敌）公平的探索机会
+                idx = int(self.rng.integers(n))
+            else:
+                idx = int(self.rng.choice(n, p=p))
+            # 混合分布（ε 均匀 + (1-ε) 策略）的实际概率，logprob 按此计算
+            prob = (1.0 - EPS) * p[idx] + EPS / n
+            lp = float(np.log(prob + 1e-12))
         else:
             idx = int(np.argmax(logits))
             lp = 0.0
@@ -208,14 +238,21 @@ class RlPolicy:
             json.dump(data, f)
 
 
-# ── 自博弈一局：返回 (winner, side0_is_model, trajectory, stats_diff) ──
-# trajectory: [(x, slot, lp)] 记录模型每一步（两侧都记，owner 视角归一化）
-def play_game(policy_a, policy_b, seed=0, record_for='both'):
+# ── 自博弈一局：返回 (winner, traj, devour_stat) ──
+# traj: [(x, slot, lp, r, owner)] 每步即时奖励（终局 ±R_WIN/R_LOSE 已并入最后一步）
+# devour_stat: {'enemy': n, 'self': n} 本局吞噬敌/己次数（验证修正效果）
+# 奖励设计：
+#   1. 战力差 Δ 变化（动作阶段，滚木前结算）
+#   2. 事件奖励：击杀/损失/吞噬敌/吞噬己/重复警告
+#   3. 滚木是回合间自动结算：效果记给滚木主人，挂在其下一次行动上（pending）
+#   4. 终局 ±R_WIN/R_LOSE
+def play_game(policy_a, policy_b, seed=0, record_for='a'):
     g = AimGame(limit=16)
     ai_a, ai_b = policy_a, policy_b  # 玩家0=policy_a，玩家1=policy_b
     traj = []
+    pending = [0.0, 0.0]   # 滚木结算奖励，等滚木主人下一次行动时并入
+    devour_stat = {'enemy': 0, 'self': 0}
     guard = 0
-    prev_stats = [dict(g.stats), dict(g.stats)]
     while g.winner is None and guard < MAX_GUARD:
         guard += 1
         owner = g.turn
@@ -223,6 +260,17 @@ def play_game(policy_a, policy_b, seed=0, record_for='both'):
         a, lp = p.act(g, sample=True)
         if a is None:
             break
+        # 吞噬敌/己预判（devour 只吃正前方 1 格）
+        devour_enemy = devour_self = False
+        if a.get('type') == 'devour':
+            j = int(a.get('j', -1))
+            if 0 <= j < len(g.cells):
+                o = g.cells[j].o
+                devour_enemy = o is not None and o != owner
+                devour_self = o == owner
+        # 动作前快照（owner 视角）
+        delta0 = g.sum_of(owner) - g.sum_of(1 - owner)
+        k0, l0 = g.stats['kills'][owner], g.stats['losses'][owner]
         r = g.apply_action(owner, a, defer_roll=True)
         if not r['ok']:
             acts = g.get_legal_actions(owner)
@@ -232,22 +280,64 @@ def play_game(policy_a, policy_b, seed=0, record_for='both'):
             if not r['ok']:
                 break
             a, lp = acts[0], 0.0
-        # 记录模型侧轨迹（视角归一化后）
+        # ── 动作阶段奖励（滚木前，owner 视角）──
+        delta1 = g.sum_of(owner) - g.sum_of(1 - owner)
+        step_r = R_DELTA * (delta1 - delta0)
+        k1, l1 = g.stats['kills'][owner], g.stats['losses'][owner]
+        kd, ld = k1 - k0, l1 - l0
+        if devour_enemy:
+            step_r += R_DEVOUR_ENEMY
+            devour_stat['enemy'] += 1
+        elif devour_self:
+            step_r += R_DEVOUR_SELF
+            devour_stat['self'] += 1
+        else:
+            step_r += R_KILL * kd + R_LOSS * ld
+        if r.get('repeatWarn'):
+            step_r += R_REPEAT_WARN
+        # ── 滚木阶段：自动结算，效果记给滚木主人（= 当前 g.turn）──
+        if g.has_pending_roll:
+            roller = g.turn
+            rd0 = g.sum_of(roller) - g.sum_of(1 - roller)
+            rk0, rl0 = g.stats['kills'][roller], g.stats['losses'][roller]
+            while g.has_pending_roll:
+                if g.roll_step_once(g.turn) is None:
+                    g.clear_pending_roll()
+                    break
+            rd1 = g.sum_of(roller) - g.sum_of(1 - roller)
+            roll_r = R_DELTA * (rd1 - rd0)
+            rk1, rl1 = g.stats['kills'][roller], g.stats['losses'][roller]
+            roll_r += R_KILL * (rk1 - rk0) + R_LOSS * (rl1 - rl0)
+            pending[roller] += roll_r
+        # 记录模型侧轨迹（视角归一化后，owner 视角即时奖励 + 滚木 pending）
         if record_for == 'both' or (record_for == 'a' and owner == 0) or (record_for == 'b' and owner == 1):
             x = p.encode(g)
             slot = p.slot_of(a, owner == 1, g)
             if slot is not None:
-                traj.append((x, slot, lp))
-        while g.has_pending_roll:
-            if g.roll_step_once(g.turn) is None:
-                g.clear_pending_roll()
-                break
-    return g.winner, traj
+                traj.append((x, slot, lp, step_r + pending[owner], owner))
+                pending[owner] = 0.0
+    # ── 终局奖励（并入最后一步，含未结算的滚木奖励）──
+    if g.winner is not None and traj:
+        x, slot, lp, rr, own = traj[-1]
+        traj[-1] = (x, slot, lp, rr + pending[own] + (R_WIN if own == g.winner else R_LOSE), own)
+    return g.winner, traj, devour_stat
+
+
+# ── return-to-go 折现 ──
+def discount(rewards, gamma=GAMMA):
+    """计算每步的折现回报（未来即时奖励之和）"""
+    returns = np.zeros(len(rewards), dtype=np.float64)
+    acc = 0.0
+    for t in range(len(rewards) - 1, -1, -1):
+        acc = rewards[t] + gamma * acc
+        returns[t] = acc
+    return returns
 
 
 # ── REINFORCE + 价值基线更新 ──
 def update(policy, batch, lr=LR):
-    """batch: [(x, slot, lp, R)] 每步样本；R = 该局总奖励"""
+    """batch: [(x, slot, lp, return)] 每步样本；return = 已折现 return-to-go
+    advantage = return - V(s)（价值头拟合 return，真·价值基线）"""
     if not batch:
         return 0.0
     X = np.array([b[0] for b in batch], dtype=np.float64)
@@ -265,12 +355,11 @@ def update(policy, batch, lr=LR):
     probs = e / e.sum(axis=1, keepdims=True)
     row = np.arange(len(batch))
     lp_cur = np.log(probs[row, slots] + 1e-12)
-    # 价值基线（batch 内平均 R），advantage
-    baseline = R.mean()
-    adv = R - baseline
+    # 价值基线：advantage = return - V(s)
+    adv = R - values[:, 0]
     # 损失
     loss_p = -(adv * lp_cur).mean()
-    loss_v = ((R[:, None] - values) ** 2).mean()
+    loss_v = ((R - values[:, 0]) ** 2).mean()
     # 反向
     dlogits = probs.copy()
     dlogits[row, slots] -= 1
@@ -360,6 +449,7 @@ def main():
     total_games = 0
     rewards = []
     batch = []
+    devour_total = [0, 0]   # [吞敌, 吞己] 累计（验证吞噬修正效果）
     t0 = time.time()
     base_wr = base_win_rate()  # 原模型（BC 基础）vs hard 胜率（保留参考）
     base_score = None
@@ -378,9 +468,11 @@ def main():
             write_status({'state': 'stopped', 'games': total_games, 'baseWinRate': base_wr,
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
             return
-        # 自博弈一局（策略 vs 延迟快照）
-        winner, traj = play_game(policy, opponent, seed=total_games)
+        # 自博弈一局（策略 vs 延迟快照；只记录 policy 侧轨迹——对手侧样本会污染梯度）
+        winner, traj, dev = play_game(policy, opponent, seed=total_games, record_for='a')
         total_games += 1
+        devour_total[0] += dev['enemy']
+        devour_total[1] += dev['self']
         # 达到目标局数 → 自动停止（优雅保存）
         if target_games > 0 and total_games >= target_games:
             score, grade = eval_model_score(policy)
@@ -395,13 +487,15 @@ def main():
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
             print(f'目标局数 {target_games} 达成，自动停止。综合分 {score}（{grade}）', flush=True)
             return
-        # 奖励：胜负 ±1（我方=policy 在玩家0）
-        R = 1.0 if winner == 0 else -1.0
-        rewards.append(R)
-        for (x, slot, lp) in traj:
-            batch.append((x, slot, lp, R))
-        # 更新
-        if len(batch) >= 64:
+        # 每步即时奖励 → 折现 return-to-go（按局），入 batch
+        if traj:
+            rs = np.array([t[3] for t in traj], dtype=np.float64)
+            rewards.append(float(rs.mean()))   # 均奖 = 本局平均每步即时奖励
+            rets = discount(rs, GAMMA)
+            for (x, slot, lp, _r, _own), ret in zip(traj, rets):
+                batch.append((x, slot, lp, ret))
+        # 更新（每 BATCH_GAMES 局一次）
+        if total_games % BATCH_GAMES == 0 and batch:
             loss = update(policy, batch, lr=optimizer_lr)
             batch = []
         # 延迟快照对手
@@ -411,7 +505,7 @@ def main():
         if total_games % EVAL_EVERY == 0:
             score, grade = eval_model_score(policy)
             avg = float(np.mean(rewards[-EVAL_EVERY:])) if rewards else 0
-            print(f'[{total_games}局] 均奖 {avg:.2f} 综合分 {score}（{grade}） 耗时{(time.time()-t0)/60:.1f}m', flush=True)
+            print(f'[{total_games}局] 均奖 {avg:.2f} 综合分 {score}（{grade}） 吞敌{devour_total[0]} 吞己{devour_total[1]} 耗时{(time.time()-t0)/60:.1f}m', flush=True)
             append_history(total_games, score, grade, avg)  # 波形图历史（综合得分）
             policy.save(RL_WEIGHTS, version=rl_version, base_version=base_version,
                         extra={'games': total_games, 'avgReward': round(avg, 3),
