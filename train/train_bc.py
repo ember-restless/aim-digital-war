@@ -47,7 +47,9 @@ def rebuild(step, limit):
     cells = []
     for enc in step['cells'][:MAX_CELLS]:
         v, o, bridge, onBridge, auto = enc
-        cells.append(AimCell(int(v), o=None if o == -1 else int(o),
+        # 防御：联机记录里桥格子 v 可能是 null/None（服务器规则桥无 v 字段），按 0 处理
+        cells.append(AimCell(int(v) if v is not None else 0,
+                             o=None if o == -1 else (int(o) if o is not None else None),
                              bridge=bool(bridge), onBridge=bool(onBridge), auto=bool(auto)))
     # 补足 8 格
     while len(cells) < MAX_CELLS:

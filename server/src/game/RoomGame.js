@@ -224,10 +224,11 @@ class RoomGame {
   // 玩家执行行动（服务端权威判定；手动 endTurn 延后滚木 → 逐步驱动，对齐热座）
   handleAction(playerIdx, action) {
     // 操作前快照（训练记录用；与训练场 local_socket 同格式）
+    // 桥格子没有 v 字段（undefined）→ 记 0，与训练端 AimCell.v=0 语义一致
     const snapTurn = this.state.turn, snapPhase = this.state.phase;
     const snapPoints = this.state.points, snapProduce = this.state.produceLeft;
     const snapCells = this.state.map.cells.map(c =>
-      [c.v, c.o ?? -1, c.bridge ? 1 : 0, c.onBridge ? 1 : 0, c.auto ? 1 : 0]);
+      [c.v ?? 0, c.o ?? -1, c.bridge ? 1 : 0, c.onBridge ? 1 : 0, c.auto ? 1 : 0]);
     const res = R.applyAction(this.state, playerIdx, action, true);
     if (!res.ok) return res;
     if (this.recordMode && this.state) {
