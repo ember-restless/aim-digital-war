@@ -99,8 +99,11 @@ class RlPolicy:
             # 给 8 个格子的「devour 敌」槽（i*12+8）加探索偏置，让 AI 敢于尝试吞敌。
             # 这只是探索引导，不是硬编码——学成什么样完全由奖励塑形决定，
             # 若吞敌真不好，梯度会把这个偏置拉回去（bo 参与更新）。
-            for i in range(MAX_CELLS):
-                self.bo[i * 12 + 8] += DEVOUR_PRIOR
+            # 注意：RL 存档（rl: True）的 bo 已含先验（训练期加过且参与更新），
+            # 重新加载（从存档继续训练）时再加会双倍，必须跳过。
+            if not w.get('rl'):
+                for i in range(MAX_CELLS):
+                    self.bo[i * 12 + 8] += DEVOUR_PRIOR
             # 价值头：BC 权重没有 → 新初始化
             if 'wv' in w:
                 self.wv = np.array(w['wv'], dtype=np.float64).reshape(1, HIDDEN)
@@ -533,8 +536,17 @@ def main():
     print(f'=== 自博弈强化学习启动 base=BC v{base_version} 目标局数={target_games or "无限"} ===', flush=True)
     if os.path.exists(STOP_FILE):
         os.remove(STOP_FILE)
-    policy = RlPolicy(BC_WEIGHTS, seed=42)
-    base_ref = RlPolicy(BC_WEIGHTS, seed=0)  # 行为诊断参照（argmax 差异率对比）
+    # 起点：优先从上次 RL 存档继续（翻转量/进度保留，牢大定 B 方案），
+    # 无存档才从 BC 权重起步。RL 存档 rl:True → 不重复加吞敌先验。
+    if os.path.exists(RL_WEIGHTS):
+        start_weights = RL_WEIGHTS
+        policy = RlPolicy(RL_WEIGHTS, seed=42)
+        print('检测到 RL 存档 → 从上次进度继续训练（翻转量保留）', flush=True)
+    else:
+        start_weights = BC_WEIGHTS
+        policy = RlPolicy(BC_WEIGHTS, seed=42)
+        print('无 RL 存档 → 从 BC 权重起步', flush=True)
+    base_ref = RlPolicy(BC_WEIGHTS, seed=0)  # 行为诊断参照（对比外部基线）
     opponent = policy.clone()  # 延迟快照对手
     rl_version = 1
     try:
@@ -544,6 +556,13 @@ def main():
         pass
     optimizer_lr = LR
     total_games = 0
+    try:
+        # 从存档继续时局数接续（波形图连续；目标局数按「本轮」判定，见下）
+        if os.path.exists(RL_WEIGHTS):
+            total_games = int(json.load(open(RL_WEIGHTS, encoding='utf-8')).get('games', 0))
+    except Exception:
+        pass
+    start_games = total_games  # 本轮起点（存档局数或 0）；target 按本轮局数判定
     rewards = []
     batch = []
     devour_total = [0, 0]   # [吞敌, 吞己] 累计（验证吞噬修正效果）
@@ -558,20 +577,20 @@ def main():
             base_score = json.load(open(EVAL_FILE, encoding='utf-8')).get('score', {}).get('total')
     except Exception:
         pass
-    # 用当前 base 权重实时评估一次——确保基准线与实际 warm start 权重一致。
-    # 否则 train_weights.json 可能已被重新部署/重评估，启动快照的 baseScore 会失真。
+    # 用起点权重实时评估一次——基准线与实际 warm start 权重一致（BC 起步或 RL 存档继续）
     try:
         from eval_model import run_eval
-        data = run_eval(BC_WEIGHTS, EVAL_SPEC)
+        data = run_eval(start_weights, EVAL_SPEC)
         if data:
             base_score = data['score']['total']
             base_wr = data['summary'].get('vsHard')
-            print(f'实时基准评估: 原模型综合分 {base_score}（{data["score"]["grade"]}） vsHard {base_wr}', flush=True)
+            print(f'实时基准评估: 起点综合分 {base_score}（{data["score"]["grade"]}） vsHard {base_wr}', flush=True)
     except Exception as e:
         print(f'实时基准评估失败（用缓存值）: {e}', flush=True)
     print(f'原模型 vs hard 基准胜率: {base_wr}  综合评分: {base_score}', flush=True)
 
     while True:
+        round_games = total_games - start_games  # 本轮局数（周期判定用，从存档继续不错乱）
         if os.path.exists(STOP_FILE):
             print('检测到停止信号，保存退出', flush=True)
             policy.save(RL_WEIGHTS, version=rl_version, base_version=base_version,
@@ -583,10 +602,10 @@ def main():
             return
         # 对手：1/3 局打规则 AI（轮换 easy/normal/hard，对齐评估目标），
         # 其余打延迟快照（自博弈）。
-        if total_games % 3 == 0:
+        if round_games > 0 and round_games % 3 == 0:
             level = ('easy', 'normal', 'hard')[(total_games // 3) % 3]
             opponent = RuleOpp(level, seed=total_games)
-        elif total_games % SNAP_EVERY == 0 or opponent is None:
+        elif (round_games > 0 and round_games % SNAP_EVERY == 0) or opponent is None:
             opponent = policy.clone()
         # 自博弈一局（只记录 policy 侧轨迹——对手侧样本会污染梯度）
         winner, traj, dev = play_game(policy, opponent, seed=total_games, record_for='a')
@@ -595,8 +614,8 @@ def main():
         devour_total[1] += dev['self']
         if winner == 0:
             sp_wins += 1   # 策略赢延迟快照（旧自己）→ 学习信号
-        # 达到目标局数 → 自动停止（优雅保存）
-        if target_games > 0 and total_games >= target_games:
+        # 达到目标局数 → 自动停止（优雅保存）；目标按「本轮局数」判定（从存档继续时累计不误触）
+        if target_games > 0 and (total_games - start_games) >= target_games:
             score, grade = eval_model_score(policy)
             avg = float(np.mean(rewards[-50:])) if rewards else 0
             append_history(total_games, score, grade, avg)
@@ -618,19 +637,19 @@ def main():
             for (x, slot, lp, _r, _own), ret in zip(traj, rets):
                 batch.append((x, slot, lp, ret))
         # 更新（每 BATCH_GAMES 局一次）
-        if total_games % BATCH_GAMES == 0 and batch:
+        if round_games > 0 and round_games % BATCH_GAMES == 0 and batch:
             loss = update(policy, batch, lr=optimizer_lr)
             batch = []
         # 延迟快照对手
-        if total_games % SNAP_EVERY == 0:
+        if round_games > 0 and round_games % SNAP_EVERY == 0:
             opponent = policy.clone()
         # 定期评估 + 保存
-        if total_games % EVAL_EVERY == 0:
+        if round_games > 0 and round_games % EVAL_EVERY == 0:
             score, grade = eval_model_score(policy)
             avg = float(np.mean(rewards[-EVAL_EVERY:])) if rewards else 0
             # ── 行为变化诊断（每 200 局）：argmax 决策 vs base 的差异率 ──
             # 分数由 argmax 评估决定；权重在动 ≠ 行为在变，这个指标直接显示决策层变化
-            if total_games % 200 == 0:
+            if round_games > 0 and round_games % 200 == 0:
                 from rules import AimGame
                 same = diff = 0
                 for _ in range(12):
@@ -647,7 +666,7 @@ def main():
                             if g.roll_step_once(g.turn) is None: g.clear_pending_roll(); break
                 div = diff / (same + diff) * 100 if (same + diff) else 0
                 print(f'  行为诊断: argmax 决策差异率 {div:.1f}%（vs base）', flush=True)
-            print(f'[{total_games}局] 均奖 {avg:.2f} 综合分 {score}（{grade}） 温度{policy.temp:.2f} 吞敌{devour_total[0]} 吞己{devour_total[1]} 自博弈胜率{sp_wins/total_games*100:.0f}% 耗时{(time.time()-t0)/60:.1f}m', flush=True)
+            print(f'[{total_games}局] 均奖 {avg:.2f} 综合分 {score}（{grade}） 温度{policy.temp:.2f} 吞敌{devour_total[0]} 吞己{devour_total[1]} 自博弈胜率{sp_wins/max(1, round_games)*100:.0f}% 耗时{(time.time()-t0)/60:.1f}m', flush=True)
             append_history(total_games, score, grade, avg)  # 波形图历史（综合得分）
             # ── 自适应探索：分数平台期 → 提高采样温度激发新行为（牢大定）──
             if score is not None:
@@ -672,7 +691,7 @@ def main():
                           'baseVersion': base_version, 'baseWinRate': base_wr, 'baseScore': base_score,
                           'temp': policy.temp,
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
-        elif total_games % SAVE_EVERY == 0:
+        elif round_games > 0 and round_games % SAVE_EVERY == 0:
             write_status({'state': 'running', 'games': total_games,
                           'avgReward': round(float(np.mean(rewards[-SAVE_EVERY:])) if rewards else 0, 3),
                           'rlVersion': rl_version, 'baseVersion': base_version,
