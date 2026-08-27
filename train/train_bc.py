@@ -268,10 +268,13 @@ def save_weights(params, out_path):
             version = int(old.get('version', 0)) + 1
         except Exception:
             pass
+    # hidden 用实际权重维度（warm start 64 单元时是 64，不能写死 HIDDEN=128——
+    # 否则加载端按 hidden 字段 reshape 会崩，游戏端 AI 直接失效）
+    hidden = int(params['b1'].shape[0])
     data = {
         'version': version,
         'updatedAt': time.strftime('%Y-%m-%d %H:%M:%S'),
-        'in': IN_DIM, 'hidden': HIDDEN, 'out': OUT_SLOTS,
+        'in': IN_DIM, 'hidden': hidden, 'out': OUT_SLOTS,
         'w1': flat(params['w1']), 'b1': flat(params['b1']),
         'w2': flat(params['w2']), 'b2': flat(params['b2']),
         'wo': flat(params['wo']), 'bo': flat(params['bo']),
