@@ -1,6 +1,6 @@
 {
- "ts": "2026-08-27 15:06:09",
- "modelVersion": 47,
+ "ts": "2026-08-27 15:11:17",
+ "modelVersion": 50,
  "totalGames": 32,
  "results": [
   {
@@ -9,7 +9,7 @@
    "games": 4,
    "wins": 2,
    "winRate": 0.5,
-   "avgTurns": 38.5
+   "avgTurns": 36.8
   },
   {
    "opponent": "easy",
@@ -41,30 +41,30 @@
    "games": 8,
    "wins": 1,
    "winRate": 0.12,
-   "avgTurns": 41.0
+   "avgTurns": 39.5
   },
   {
    "opponent": "hard",
    "side": 1,
    "games": 8,
-   "wins": 3,
-   "winRate": 0.38,
-   "avgTurns": 41.6
+   "wins": 4,
+   "winRate": 0.5,
+   "avgTurns": 38.6
   }
  ],
  "summary": {
-  "overall": 0.34,
+  "overall": 0.38,
   "asLeft": 0.19,
-  "asRight": 0.5,
+  "asRight": 0.56,
   "vsEasy": 0.75,
   "vsNormal": 0.12,
-  "vsHard": 0.25
+  "vsHard": 0.31
  },
  "gameStats": {
   "avgKills": 1.5,
-  "avgLosses": 2.1,
+  "avgLosses": 2.0,
   "avgProduce": 1.7,
-  "avgTurns": 42.2,
+  "avgTurns": 40.8,
   "maxDigit": 9
  },
  "bench": {
@@ -237,7 +237,7 @@
   ]
  },
  "score": {
-  "total": 43.4,
+  "total": 43.5,
   "max": 100,
   "grade": "D",
   "items": [
@@ -262,7 +262,7 @@
     "name": "对战·hard",
     "score": 0,
     "max": 20,
-    "basis": "胜率 25%",
+    "basis": "胜率 31%",
     "std": "100% 胜率满分 20 分；每降 10% 扣 4 分"
    },
    {
@@ -308,9 +308,9 @@
    {
     "key": "kd",
     "name": "运营·攻守效率",
-    "score": 2.8,
+    "score": 2.9,
     "max": 5,
-    "basis": "击杀/损失 = 1.5/2.1 = 0.71",
+    "basis": "击杀/损失 = 1.5/2.0 = 0.75",
     "std": "K/D≥1.6 满分；≥1 得 3.5；≥0.5 得 2"
    },
    {
@@ -326,7 +326,7 @@
     "name": "运营·持久能力",
     "score": 5,
     "max": 5,
-    "basis": "平均回合 42.2",
+    "basis": "平均回合 40.8",
     "std": "≥35 回合满分 5；每少 7 扣 1"
    }
   ]

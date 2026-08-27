@@ -714,24 +714,36 @@ const dlServer = http.createServer((req, res) => {
     res.end(JSON.stringify(trainStats()));
     return;
   }
-  // ── 自博弈强化学习：启动（后台进程，以最新 BC 权重为基）──
+  // ── 自博弈强化学习：启动（后台进程，以最新 BC 权重为基；body 可带 games=目标局数）──
   if (pathname === '/api/train/rl/start') {
     if (rlProcess && rlProcess.exitCode === null) {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ ok: true, msg: '已在运行' }));
       return;
     }
-    const stopFile = path.join(__dirname, '..', '..', 'train', 'rl_stop');
-    try { if (fs.existsSync(stopFile)) fs.unlinkSync(stopFile); } catch (_) {}
-    const logPath = path.join(__dirname, '..', '..', 'train', 'rl.log');
-    const out = fs.openSync(logPath, 'a');
-    fs.writeSync(out, `\n===== RL 启动 ${new Date().toISOString()} =====\n`);
-    rlProcess = spawn('python3', ['/root/aim/train/rl_selfplay.py'],
-      { cwd: '/root/aim', stdio: ['ignore', out, out], detached: true });
-    rlProcess.unref(); // 服务器重启不杀 RL
-    rlProcess.on('close', () => { rlProcess = null; });
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: true, msg: 'RL 已启动' }));
+    // 读 body（可带 games 目标局数）
+    let body = '';
+    req.on('data', d => { body += d; if (body.length > 4096) req.destroy(); });
+    req.on('end', () => {
+      let rlGames = 0;
+      try {
+        const b = JSON.parse(body || '{}');
+        rlGames = parseInt(b.games, 10) || 0;
+      } catch (_) {}
+      const stopFile = path.join(__dirname, '..', '..', 'train', 'rl_stop');
+      try { if (fs.existsSync(stopFile)) fs.unlinkSync(stopFile); } catch (_) {}
+      const logPath = path.join(__dirname, '..', '..', 'train', 'rl.log');
+      const out = fs.openSync(logPath, 'a');
+      fs.writeSync(out, `\n===== RL 启动 ${new Date().toISOString()} 目标局数=${rlGames || '无限'} =====\n`);
+      const args = ['/root/aim/train/rl_selfplay.py'];
+      if (rlGames > 0) args.push('--games', String(rlGames));
+      rlProcess = spawn('python3', args,
+        { cwd: '/root/aim', stdio: ['ignore', out, out], detached: true });
+      rlProcess.unref(); // 服务器重启不杀 RL
+      rlProcess.on('close', () => { rlProcess = null; });
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: true, msg: 'RL 已启动' + (rlGames ? '（目标 ' + rlGames + ' 局）' : '') }));
+    });
     return;
   }
   // ── 自博弈强化学习：停止（优雅退出）──

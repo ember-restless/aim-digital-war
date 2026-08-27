@@ -346,13 +346,19 @@ def base_win_rate():
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--games', type=int, default=0,
+                    help='目标训练局数（0=无限跑；跑满自动停止并保存）')
+    args = ap.parse_args()
+    target_games = args.games
     base_version = 0
     try:
         if os.path.exists(BC_WEIGHTS):
             base_version = int(json.load(open(BC_WEIGHTS, encoding='utf-8')).get('version', 0))
     except Exception:
         pass
-    print(f'=== 自博弈强化学习启动 base=BC v{base_version} ===', flush=True)
+    print(f'=== 自博弈强化学习启动 base=BC v{base_version} 目标局数={target_games or "无限"} ===', flush=True)
     if os.path.exists(STOP_FILE):
         os.remove(STOP_FILE)
     policy = RlPolicy(BC_WEIGHTS, seed=42)
@@ -382,6 +388,20 @@ def main():
         # 自博弈一局（策略 vs 延迟快照）
         winner, traj = play_game(policy, opponent, seed=total_games)
         total_games += 1
+        # 达到目标局数 → 自动停止（优雅保存）
+        if target_games > 0 and total_games >= target_games:
+            wr = eval_vs_hard(policy, games=10)
+            avg = float(np.mean(rewards[-50:])) if rewards else 0
+            append_history(total_games, wr, avg)
+            policy.save(RL_WEIGHTS, version=rl_version, base_version=base_version,
+                        extra={'games': total_games, 'avgReward': round(avg, 3),
+                               'winRateVsHard': round(wr, 3), 'targetGames': target_games})
+            write_status({'state': 'stopped', 'games': total_games, 'avgReward': round(avg, 3),
+                          'winRateVsHard': round(wr, 3), 'baseWinRate': base_wr,
+                          'targetGames': target_games,
+                          'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
+            print(f'目标局数 {target_games} 达成，自动停止。vs hard {wr:.0%}', flush=True)
+            return
         # 奖励：胜负 ±1（我方=policy 在玩家0）
         R = 1.0 if winner == 0 else -1.0
         rewards.append(R)
