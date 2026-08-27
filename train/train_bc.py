@@ -78,6 +78,9 @@ def action_slot(action, flip=False, game=None):
     """动作 → 槽位（97）：每格 12 槽——
     move1, move2, atk敌1..3, atk己1..3, dev敌, dev己, split, produce
     攻击/吞噬槽位按「目标敌我 × 距离」细分，AI 能明确指定打谁（敌方优先习得）
+    注意：翻转（flip）时 i 和 j 都必须镜像——game 已被 normalize_view 镜像，
+    目标格 j 若用原始坐标，敌我判定会错位（右方「攻击敌方」被标成「攻击己方」槽，
+    导致模型在右方状态下打自己——已修复）。
     """
     t = action.get('type')
     i = int(action.get('i', -1))
@@ -89,16 +92,20 @@ def action_slot(action, flip=False, game=None):
         steps = int(action.get('steps', 1))
         return i * 12 + (1 if steps >= 2 else 0)
     if t == 'attack':
-        k = abs(int(action.get('j', -1)) - int(action.get('i', -1)))  # 目标距离 1..3
+        k = abs(int(action.get('j', -1)) - int(action.get('i', -1)))  # 目标距离 1..3（翻转不变）
         if k < 1 or k > 3:
             return None
         j = int(action.get('j', -1))
+        if flip:
+            j = MAX_CELLS - 1 - j  # 目标格镜像（game 已镜像）
         # 目标是否敌方（o 非空且不是我方）
         is_enemy = bool(game is not None and 0 <= j < len(game.cells)
                         and game.cells[j].o is not None and game.cells[j].o != game.turn)
         return i * 12 + (2 + (k - 1) if is_enemy else 5 + (k - 1))
     if t == 'devour':
         j = int(action.get('j', -1))
+        if flip:
+            j = MAX_CELLS - 1 - j  # 目标格镜像（game 已镜像）
         is_enemy = False
         if game is not None and 0 <= j < len(game.cells):
             is_enemy = game.cells[j].o is not None and game.cells[j].o != game.turn
@@ -276,6 +283,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--epochs', type=int, default=80)
     ap.add_argument('--lr', type=float, default=0.001)
+    ap.add_argument('--fresh', action='store_true', help='从零训练（不 warm start）——洗掉旧标注学到的错误行为')
     ap.add_argument('--deploy', action='store_true', help='训练完写权重到下载目录（客户端拉取生效）')
     args = ap.parse_args()
 
@@ -292,8 +300,9 @@ def main():
     print('开始训练 MLP ...')
     t0 = time.time()
     # warm start：从现有权重继续（RL 部署后不会被从零训练覆盖，平滑演进）
+    # --fresh 时跳过：修复标注后旧权重残留错误行为，需从头洗掉
     init = None
-    if os.path.exists(WEIGHTS_FILE):
+    if not args.fresh and os.path.exists(WEIGHTS_FILE):
         try:
             w = json.load(open(WEIGHTS_FILE, encoding='utf-8'))
             if w.get('out') == OUT_SLOTS:

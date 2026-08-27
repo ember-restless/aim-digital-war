@@ -1,76 +1,76 @@
 {
- "ts": "2026-08-27 16:48:24",
- "modelVersion": 100,
- "totalGames": 32,
+ "ts": "2026-08-27 17:11:42",
+ "modelVersion": 101,
+ "totalGames": 22,
  "results": [
   {
    "opponent": "easy",
    "side": 0,
-   "games": 4,
+   "games": 3,
    "wins": 2,
-   "winRate": 0.5,
-   "avgTurns": 24.5
+   "winRate": 0.67,
+   "avgTurns": 31.0
   },
   {
    "opponent": "easy",
    "side": 1,
-   "games": 4,
-   "wins": 4,
+   "games": 3,
+   "wins": 3,
    "winRate": 1.0,
-   "avgTurns": 45.2
+   "avgTurns": 41.3
   },
   {
    "opponent": "normal",
    "side": 0,
-   "games": 4,
+   "games": 3,
    "wins": 2,
-   "winRate": 0.5,
-   "avgTurns": 20.2
+   "winRate": 0.67,
+   "avgTurns": 26.0
   },
   {
    "opponent": "normal",
    "side": 1,
-   "games": 4,
-   "wins": 4,
-   "winRate": 1.0,
-   "avgTurns": 57.2
+   "games": 3,
+   "wins": 2,
+   "winRate": 0.67,
+   "avgTurns": 46.7
   },
   {
    "opponent": "hard",
    "side": 0,
-   "games": 8,
+   "games": 5,
    "wins": 1,
-   "winRate": 0.12,
-   "avgTurns": 28.4
+   "winRate": 0.2,
+   "avgTurns": 29.4
   },
   {
    "opponent": "hard",
    "side": 1,
-   "games": 8,
+   "games": 5,
    "wins": 2,
-   "winRate": 0.25,
-   "avgTurns": 38.1
+   "winRate": 0.4,
+   "avgTurns": 35.4
   }
  ],
  "summary": {
-  "overall": 0.47,
-  "asLeft": 0.31,
-  "asRight": 0.62,
-  "vsEasy": 0.75,
-  "vsNormal": 0.75,
-  "vsHard": 0.19
+  "overall": 0.55,
+  "asLeft": 0.45,
+  "asRight": 0.64,
+  "vsEasy": 0.83,
+  "vsNormal": 0.67,
+  "vsHard": 0.3
  },
  "gameStats": {
-  "avgKills": 1.6,
-  "avgLosses": 1.2,
-  "avgProduce": 2.2,
-  "avgTurns": 35.0,
+  "avgKills": 1.4,
+  "avgLosses": 1.1,
+  "avgProduce": 2.5,
+  "avgTurns": 34.5,
   "maxDigit": 8
  },
  "bench": {
-  "score": 11,
-  "total": 20,
-  "passRate": 0.55,
+  "score": 12,
+  "total": 24,
+  "passRate": 0.5,
   "byCat": {
    "进攻": {
     "score": 4,
@@ -91,6 +91,11 @@
     "score": 3,
     "total": 5,
     "rate": 0.6
+   },
+   "自律": {
+    "score": 1,
+    "total": 4,
+    "rate": 0.25
    }
   },
   "details": [
@@ -233,28 +238,56 @@
     "ok": true,
     "chosen": "endTurn",
     "expect": "move/endTurn"
+   },
+   {
+    "name": "自律：无压力不打己方小兵",
+    "cat": "自律",
+    "ok": true,
+    "chosen": "move",
+    "expect": "move/endTurn"
+   },
+   {
+    "name": "自律：有敌可打时不弃敌打我",
+    "cat": "自律",
+    "ok": false,
+    "chosen": "move",
+    "expect": "attack 敌方"
+   },
+   {
+    "name": "自律：不攻击己方指挥部",
+    "cat": "自律",
+    "ok": false,
+    "chosen": "attack",
+    "expect": "非 attack"
+   },
+   {
+    "name": "自律：斩杀正前方敌人",
+    "cat": "自律",
+    "ok": false,
+    "chosen": "attack",
+    "expect": "attack 敌方"
    }
   ]
  },
  "score": {
-  "total": 51.5,
+  "total": 48.6,
   "max": 100,
   "grade": "C",
   "items": [
    {
     "key": "vsEasy",
     "name": "对战·easy",
-    "score": 4.2,
+    "score": 5.5,
     "max": 8,
-    "basis": "胜率 75%",
+    "basis": "胜率 83%",
     "std": "100% 胜率满分 8 分；每降 10% 扣 1.5 分"
    },
    {
     "key": "vsNormal",
     "name": "对战·normal",
-    "score": 7.0,
+    "score": 5.3,
     "max": 12,
-    "basis": "胜率 75%",
+    "basis": "胜率 67%",
     "std": "100% 胜率满分 12 分；每降 10% 扣 2 分"
    },
    {
@@ -262,55 +295,63 @@
     "name": "对战·hard",
     "score": 0,
     "max": 20,
-    "basis": "胜率 19%",
+    "basis": "胜率 30%",
     "std": "100% 胜率满分 20 分；每降 10% 扣 4 分"
    },
    {
     "key": "atk",
     "name": "能力·进攻",
-    "score": 8.0,
-    "max": 10,
+    "score": 6.4,
+    "max": 8,
     "basis": "4/5 题通过",
-    "std": "通过率 × 10 分"
+    "std": "通过率 × 8 分"
    },
    {
     "key": "def",
     "name": "能力·防守",
-    "score": 4.0,
-    "max": 10,
+    "score": 3.2,
+    "max": 8,
     "basis": "2/5 题通过",
-    "std": "通过率 × 10 分"
+    "std": "通过率 × 8 分"
    },
    {
     "key": "eco",
     "name": "能力·经济",
-    "score": 4.0,
-    "max": 10,
+    "score": 3.2,
+    "max": 8,
     "basis": "2/5 题通过",
-    "std": "通过率 × 10 分"
+    "std": "通过率 × 8 分"
    },
    {
     "key": "tac",
     "name": "能力·战术",
-    "score": 6.0,
-    "max": 10,
+    "score": 4.8,
+    "max": 8,
     "basis": "3/5 题通过",
-    "std": "通过率 × 10 分"
+    "std": "通过率 × 8 分"
+   },
+   {
+    "key": "self",
+    "name": "能力·自律",
+    "score": 2.0,
+    "max": 8,
+    "basis": "1/4 题通过",
+    "std": "通过率 × 8 分"
    },
    {
     "key": "eco",
     "name": "运营·造兵效率",
     "score": 5,
     "max": 5,
-    "basis": "平均造兵 2.2",
+    "basis": "平均造兵 2.5",
     "std": "≥2 满分 5；每少 0.5 扣 1"
    },
    {
     "key": "kd",
     "name": "运营·攻守效率",
-    "score": 4.3,
+    "score": 4.2,
     "max": 5,
-    "basis": "击杀/损失 = 1.6/1.2 = 1.33",
+    "basis": "击杀/损失 = 1.4/1.1 = 1.27",
     "std": "K/D≥1.6 满分；≥1 得 3.5；≥0.5 得 2"
    },
    {
@@ -326,7 +367,7 @@
     "name": "运营·持久能力",
     "score": 5,
     "max": 5,
-    "basis": "平均回合 35.0",
+    "basis": "平均回合 34.5",
     "std": "≥35 回合满分 5；每少 7 扣 1"
    }
   ]

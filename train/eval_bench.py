@@ -252,6 +252,53 @@ CASES.append({'name': '滚木开路：敌人会自己碾，别浪费行动', 'ca
               'expect': 'move/endTurn', 'check': lambda a: a.get('type') in ('move', 'endTurn')})
 
 
+# ═══ 自律（不攻击自己——牢大专项）═══
+def build_no_self_atk_idle():
+    """自律1：无敌人压力时，5 不得打己方 1（打自己=溢出升级+造桥，无脑浪费点数）"""
+    g = g16()
+    g.cells[3] = AimCell(5, o=0)   # 我方 5
+    g.cells[4] = AimCell(1, o=0)   # 我方 1（5 打 1 → 1-5=-4 变 4+桥）
+    g.cells[7] = AimCell(8, o=1)   # 敌方基地很远
+    return g
+CASES.append({'name': '自律：无压力不打己方小兵', 'cat': '自律', 'build': build_no_self_atk_idle,
+              'expect': 'move/endTurn', 'check': lambda a: a.get('type') in ('move', 'endTurn')})
+
+
+def build_no_self_atk_prio():
+    """自律2：4 炮手同时可打己方 1 和敌方 5 → 必须打敌方（弃敌打我=帮敌人）"""
+    g = g16()
+    g.cells[1] = AimCell(4, o=0)   # 我方炮手 4（射程 3：1→2→3→4）
+    g.cells[2] = AimCell(1, o=0)   # 我方 1（距离 1，可打）
+    g.cells[4] = AimCell(5, o=1)   # 敌方 5（距离 3，可打；4 打 5 → 5-4=1 削弱）
+    g.cells[7] = AimCell(8, o=1)
+    return g
+CASES.append({'name': '自律：有敌可打时不弃敌打我', 'cat': '自律', 'build': build_no_self_atk_prio,
+              'expect': 'attack 敌方', 'check': lambda a: a.get('type') == 'attack' and a.get('j') == 4})
+
+
+def build_no_atk_base():
+    """自律3：不得攻击己方 8/9（基地/指挥部，纯削弱）"""
+    g = g16()
+    g.cells[2] = AimCell(4, o=0)   # 我方炮手 4（射程 3）
+    g.cells[3] = AimCell(9, o=0)   # 我方指挥部（4 打 9 → 9-4=5 纯亏）
+    g.cells[7] = AimCell(8, o=1)
+    return g
+CASES.append({'name': '自律：不攻击己方指挥部', 'cat': '自律', 'build': build_no_atk_base,
+              'expect': '非 attack', 'check': lambda a: a.get('type') != 'attack'})
+
+
+def build_no_self_atk_kill():
+    """自律4：5 正前方是敌方 5（可一击消灭）→ 攻击敌方而非己方单位"""
+    g = g16()
+    g.cells[3] = AimCell(5, o=0)   # 我方 5
+    g.cells[2] = AimCell(1, o=0)   # 我方 1（在身后，非攻击方向；5 朝右只打 4）
+    g.cells[4] = AimCell(5, o=1)   # 敌方 5（正前方，5 打 5 消灭）
+    g.cells[7] = AimCell(8, o=1)
+    return g
+CASES.append({'name': '自律：斩杀正前方敌人', 'cat': '自律', 'build': build_no_self_atk_kill,
+              'expect': 'attack 敌方', 'check': lambda a: a.get('type') == 'attack' and a.get('j') == 4})
+
+
 def run_bench(model_path):
     """返回 {score, total, byCat: {cat: {score, total}}, details: [{name,cat,ok,chosen}]}"""
     ai = ModelAi(model_path, seed=1)

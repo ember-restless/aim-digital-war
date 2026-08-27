@@ -71,12 +71,12 @@ def compute_score(summary, bench, gs, results):
         s = max(0, wt - max(0, (1 - r)) * 10 * cut)
         add('vs' + opp.capitalize(), f'对战·{opp}', s, wt,
             f'胜率 {r:.0%}', f'100% 胜率满分 {wt} 分；每降 10% 扣 {cut} 分')
-    # 能力（40，每类 10）
-    for cat, key in (('进攻', 'atk'), ('防守', 'def'), ('经济', 'eco'), ('战术', 'tac')):
+    # 能力（40，5 类每类 8）
+    for cat, key in (('进攻', 'atk'), ('防守', 'def'), ('经济', 'eco'), ('战术', 'tac'), ('自律', 'self')):
         c = bench['byCat'].get(cat, {'score': 0, 'total': 0})
         rate = c['score'] / c['total'] if c['total'] else 0
-        add(key, f'能力·{cat}', rate * 10, 10,
-            f'{c["score"]}/{c["total"]} 题通过', '通过率 × 10 分')
+        add(key, f'能力·{cat}', rate * 8, 8,
+            f'{c["score"]}/{c["total"]} 题通过', '通过率 × 8 分')
     # 运营（20）
     kd = gs['avgKills'] / gs['avgLosses'] if gs['avgLosses'] else 9.9
     add('eco', '运营·造兵效率', min(5, 1 + gs['avgProduce'] * 2), 5,
