@@ -20,6 +20,24 @@ OUT = 49
 MAX_CELLS = 8
 
 
+def _is_silly(action, game, owner):
+    """「合法但无意义」动作：attack 己方、split 8/9（与 dart TrainAi 一致）"""
+    t = action.get('type')
+    if t == 'attack':
+        j = int(action.get('j', -1))
+        if 0 <= j < len(game.cells):
+            target = game.cells[j]
+            if target.o == owner:
+                return True
+    if t == 'split':
+        i = int(action.get('i', -1))
+        if 0 <= i < len(game.cells):
+            v = game.cells[i].v
+            if v in (8, 9):
+                return True
+    return False
+
+
 class ModelAi:
     def __init__(self, weights_path, fallback_level='hard', seed=0):
         w = json.load(open(weights_path, 'r', encoding='utf-8'))
@@ -83,7 +101,7 @@ class ModelAi:
             # 阶段选择：启发式兜底（训练未覆盖阶段选择）
             return self.fallback.decide(game)
         acts = game.get_legal_actions(game.turn)
-        playable = [a for a in acts if a['type'] != 'endTurn']
+        playable = [a for a in acts if a['type'] != 'endTurn' and not _is_silly(a, game, game.turn)]
         if not playable:
             return {'type': 'endTurn'}
         me = game.turn

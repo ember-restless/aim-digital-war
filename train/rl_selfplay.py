@@ -41,6 +41,24 @@ def xavier(fan_in, fan_out, rng):
     return rng.uniform(-1, 1, (fan_in, fan_out)) * np.sqrt(6.0 / (fan_in + fan_out))
 
 
+def _is_silly(action, game, owner):
+    """「合法但无意义」动作：attack 己方、split 8/9（与 dart TrainAi / eval_ai 一致）"""
+    t = action.get('type')
+    if t == 'attack':
+        j = int(action.get('j', -1))
+        if 0 <= j < len(game.cells):
+            target = game.cells[j]
+            if target.o == owner:
+                return True
+    if t == 'split':
+        i = int(action.get('i', -1))
+        if 0 <= i < len(game.cells):
+            v = game.cells[i].v
+            if v in (8, 9):
+                return True
+    return False
+
+
 class RlPolicy:
     """RL 策略：共享骨干 + 策略头(49) + 价值头(1)。权重布局与 BC/dart 一致 + wv/bv。"""
 
@@ -145,7 +163,7 @@ class RlPolicy:
             a = AimAi('hard', seed=fallback_seed).decide(game)
             return a, 0.0
         acts = game.get_legal_actions(owner)
-        playable = [a for a in acts if a['type'] != 'endTurn']
+        playable = [a for a in acts if a['type'] != 'endTurn' and not _is_silly(a, game, owner)]
         if not playable:
             return {'type': 'endTurn'}, 0.0
         flip = owner == 1
