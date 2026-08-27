@@ -36,9 +36,10 @@ BATCH_GAMES = 16       # 每攒 N 局更新一次（≈950 步样本/更新，PP
 PPO_EPOCHS = 4         # 每 batch 内循环更新次数（PPO 核心：样本复用）
 PPO_CLIP = 0.2         # 重要性采样比率裁剪
 SNAP_EVERY = 20       # 每 N 局快照一次对手
-EVAL_EVERY = 50       # 每 N 局评估一次 vs hard
+EVAL_EVERY = 25       # 每 N 局评估一次（牢大定：25 局，波形图更密）
 SAVE_EVERY = 20       # 每 N 局保存权重 + 心跳
 MAX_GUARD = 600       # 单局步数上限
+HISTORY_WINDOW_GAMES = 1000  # rl_history 只保留最近 1000 局（RL 一局=一次训练，牢大定）
 
 # ── 奖励塑形（针对 AIM 特殊性设计，非通用 RL 奖励）──
 # 胜负判据是 sum_of（双方所有单位数值总和，谁先归零谁输），所以核心信号用
@@ -469,12 +470,32 @@ def write_status(data):
 
 
 def append_history(games, score, grade, avg):
-    """RL 评估历史（波形图数据源）：记录综合测试得分"""
+    """RL 评估历史（波形图数据源）：记录综合测试得分。
+    只保留最近 HISTORY_WINDOW_GAMES 局（一局=一次训练）：从尾部累计覆盖局数，
+    跨训练 games 重置时按 EVAL_EVERY 近似。"""
     os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
-    with open(HISTORY_FILE, 'a', encoding='utf-8') as f:
-        f.write(json.dumps({'games': games, 'score': score, 'grade': grade,
-                            'avgReward': round(avg, 3),
-                            'ts': time.strftime('%Y-%m-%d %H:%M:%S')}) + '\n')
+    rec = {'games': games, 'score': score, 'grade': grade,
+           'avgReward': round(avg, 3), 'ts': time.strftime('%Y-%m-%d %H:%M:%S')}
+    lines = []
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, encoding='utf-8') as f:
+            lines = [json.loads(l) for l in f if l.strip()]
+    lines.append(rec)
+    keep = []
+    covered = 0
+    for i in range(len(lines) - 1, -1, -1):
+        keep.append(lines[i])
+        if i == len(lines) - 1:
+            covered = EVAL_EVERY
+        else:
+            step = lines[i + 1]['games'] - lines[i]['games']
+            covered += step if 0 < step <= 500 else EVAL_EVERY
+        if covered >= HISTORY_WINDOW_GAMES:
+            break
+    keep.reverse()
+    with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+        for d in keep:
+            f.write(json.dumps(d) + '\n')
 
 
 def base_win_rate():
