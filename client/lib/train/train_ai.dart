@@ -85,11 +85,8 @@ class TrainAi {
       return _fallback!.decide(game);
     }
     final acts = game.getLegalActions(owner);
-    // 过滤「合法但无意义」的动作：攻击/吞噬己方、拆分基地/指挥部——
-    // 行为克隆学不到负面规则，模型会乱选，必须硬排除（启发式 AI 有打分惩罚，模型没有）
-    final playable = acts
-        .where((a) => a['type'] != 'endTurn' && !_isSilly(a, game))
-        .toList();
+    // 不做硬性动作过滤——坏习惯（打自己/乱拆）交由学习阶段纠正（RL 奖励惩罚）
+    final playable = acts.where((a) => a['type'] != 'endTurn').toList();
     if (playable.isEmpty) return {'type': 'endTurn'};
     final x = _encode(game);
     final logits = _forward(x);
@@ -129,29 +126,6 @@ class TrainAi {
         if (j >= 0 && j < game.cells.length) {
           if (!game.cells[j].bridge) return true;
         }
-      }
-    }
-    return false;
-  }
-
-  // 「合法但无意义」动作判定（与 python eval_ai/rl_selfplay 一致）：
-  // - attack 己方单位：纯掉血无意义（devour 己方是合成机制，不禁）
-  // - split 8 基地 / 9 指挥部：拆家无意义（拆单位是战术，不禁）
-  bool _isSilly(Map<String, dynamic> a, AimGame game) {
-    final t = a['type'] as String?;
-    final cells = game.cells;
-    if (t == 'attack') {
-      final j = a['j'] is num ? (a['j'] as num).toInt() : -1;
-      if (j >= 0 && j < cells.length) {
-        final target = cells[j];
-        if (target.o == game.turn) return true;
-      }
-    }
-    if (t == 'split') {
-      final i = a['i'] is num ? (a['i'] as num).toInt() : -1;
-      if (i >= 0 && i < cells.length) {
-        final v = cells[i].v;
-        if (v == 8 || v == 9) return true;
       }
     }
     return false;
