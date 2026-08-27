@@ -6,6 +6,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const { spawn } = require('child_process');
 const { Server } = require('socket.io');
 const { RoomGame } = require('./game/RoomGame');
 
@@ -39,8 +40,43 @@ function trainStats() {
       modelUpdatedAt = w.updatedAt || null;
     }
   } catch (_) {}
-  trainStatsCache = { games, steps, modelVersion, modelUpdatedAt };
+  trainStatsCache = { games, steps, modelVersion, modelUpdatedAt, training, lastTrainAt };
   return trainStatsCache;
+}
+
+// ── 自动训练（在线学习）：有新对局就后台训练，训完自动部署权重 ──
+// 节流：两次训练间隔 ≥ TRAIN_MIN_GAP；训练期间的来数据 → 训练完再补训一次（合并）
+const TRAIN_MIN_GAP = 30 * 1000; // 30s 最小间隔（防连续对局训练风暴）
+let training = false;
+let pendingTrain = false;
+let lastTrainAt = null;
+
+function triggerTrain() {
+  if (training) { pendingTrain = true; return; }
+  if (lastTrainAt && Date.now() - lastTrainAt < TRAIN_MIN_GAP) { pendingTrain = true; return; }
+  // 没有数据就不训
+  const dataFile = path.join(__dirname, '..', '..', 'train_data', 'games.jsonl');
+  if (!fs.existsSync(dataFile)) return;
+  training = true;
+  const logPath = path.join(__dirname, '..', '..', 'train', 'train.log');
+  const out = fs.openSync(logPath, 'a');
+  const started = Date.now();
+  fs.writeSync(out, `\n===== 自动训练 ${new Date().toISOString()} =====\n`);
+  const p = spawn('python3', ['/root/aim/train/train_bc.py', '--deploy', '--epochs', '40'],
+    { cwd: '/root/aim', stdio: ['ignore', out, out] });
+  p.on('close', (code) => {
+    try { fs.closeSync(out); } catch (_) {}
+    training = false;
+    lastTrainAt = Date.now();
+    trainStatsCache = null; // 统计缓存失效（版本号已变）
+    console.log(`[train] 训练结束 code=${code} 耗时=${((Date.now() - started) / 1000).toFixed(1)}s`);
+    if (pendingTrain) { pendingTrain = false; triggerTrain(); }
+  });
+  p.on('error', () => {
+    try { fs.closeSync(out); } catch (_) {}
+    training = false;
+    lastTrainAt = Date.now();
+  });
 }
 
 // ---------- 游戏服务器（Socket.io 挂到单端口 server，定义在后面） ----------
@@ -576,8 +612,9 @@ const dlServer = http.createServer((req, res) => {
           ts: Date.now(),
         });
         fs.appendFileSync(path.join(dir, 'games.jsonl'), line + '\n');
-        // 统计缓存失效
+        // 统计缓存失效 + 触发异步训练（在线学习：有数据就训，训完自动部署权重）
         trainStatsCache = null;
+        triggerTrain();
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ ok: true }));
       } catch (e) {

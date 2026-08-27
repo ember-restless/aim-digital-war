@@ -2,6 +2,7 @@
 // - AI 使用服务器训练权重（TrainAi，无权重回退 hard 启发式）
 // - 对局中记录人类每步操作，结束后上传服务器（行为克隆数据）
 // - 顶部实时显示训练统计（局数/步数/模型版本）
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -39,6 +40,8 @@ class _TrainScreenState extends State<TrainScreen> {
   int _games = 0;
   int _steps = 0;
   int _modelVersion = 0;
+  bool _training = false;
+  Timer? _statsTimer;
 
   @override
   void initState() {
@@ -46,6 +49,8 @@ class _TrainScreenState extends State<TrainScreen> {
     _initAi();
     _refreshStats();
     _newGame();
+    // 轮询训练统计：新对局/训练完成自动刷新页面
+    _statsTimer = Timer.periodic(const Duration(seconds: 12), (_) => _refreshStats());
   }
 
   Future<void> _initAi() async {
@@ -102,15 +107,32 @@ class _TrainScreenState extends State<TrainScreen> {
           .timeout(const Duration(seconds: 8));
       if (resp.statusCode == 200) {
         final j = jsonDecode(resp.body) as Map<String, dynamic>;
+        final newVer = (j['modelVersion'] as num?)?.toInt() ?? 0;
         if (mounted) {
           setState(() {
             _games = (j['games'] as num?)?.toInt() ?? 0;
             _steps = (j['steps'] as num?)?.toInt() ?? 0;
-            _modelVersion = (j['modelVersion'] as num?)?.toInt() ?? 0;
+            _training = j['training'] == true;
+            // 模型版本变化 → 拉新权重（对局中 AI 自动切到新模型）
+            if (newVer != _modelVersion) {
+              _modelVersion = newVer;
+              if (newVer > 0) _reloadModel();
+            }
           });
         }
       }
     } catch (_) {}
+  }
+
+  Future<void> _reloadModel() async {
+    await trainAi.loadFromUrl('${AppConfig.serverUrl}/downloads/train_weights.json');
+    if (mounted && _modelVersion > 0 && trainAi.hasModel) {
+      setState(() => _uploadMsg = '✨ AI 已升级到模型 v$_modelVersion');
+      // 提醒一次后清掉（避免常驻）
+      Future.delayed(const Duration(seconds: 4), () {
+        if (mounted) setState(() => _uploadMsg = '');
+      });
+    }
   }
 
   void _back() {
@@ -121,6 +143,7 @@ class _TrainScreenState extends State<TrainScreen> {
 
   @override
   void dispose() {
+    _statsTimer?.cancel();
     socket.dispose();
     super.dispose();
   }
@@ -160,7 +183,7 @@ class _TrainScreenState extends State<TrainScreen> {
     );
   }
 
-  // ── 顶部统计条：训练局数 / 步数 / 模型版本 ──
+  // ── 顶部统计条：训练局数 / 步数 / 模型版本 / 训练状态 ──
   Widget _statsBar() {
     final aiName = trainAi.hasModel ? 'AI·模型 v${trainAi.version}' : 'AI·启发式';
     return Container(
@@ -174,6 +197,10 @@ class _TrainScreenState extends State<TrainScreen> {
         _pt('步数 $_steps', 12, _paper),
         const SizedBox(width: 12),
         _pt(aiName, 12, _warn),
+        if (_training) ...[
+          const SizedBox(width: 10),
+          _pt('训练中…', 12, const Color(0xFF7FD8FF)),
+        ],
         const Spacer(),
         if (_uploadMsg.isNotEmpty) _pt(_uploadMsg, 11, _green),
         const SizedBox(width: 8),
