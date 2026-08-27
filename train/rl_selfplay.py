@@ -294,29 +294,16 @@ def update(policy, batch, lr=LR):
     return float(loss_p + loss_v)
 
 
-# ── 评估 vs hard 启发式 ──
-def eval_vs_hard(policy, games=10, seed=0):
-    wins = 0
-    for i in range(games):
-        w, _ = play_game(policy, _hard_ai(seed + i), seed=i, record_for='none')
-        if w == 0:
-            wins += 1
-    return wins / games
-
-
-def _hard_ai(seed):
-    return _Heuristic(seed)
-
-
-class _Heuristic:
-    """启发式对手包装（decide 接口同策略）"""
-
-    def __init__(self, seed):
-        self.ai = AimAi('hard', seed=seed)
-
-    def act(self, game, sample=True, temp=1.0, fallback_seed=0):
-        a = self.ai.decide(game)
-        return a, 0.0
+# ── 评估：完整测试（对局 + 能力考试 + 综合评分 0-100）──
+def eval_model_score(policy, tmp_path='/root/aim/train_data/rl_eval_tmp.json'):
+    """保存策略到临时权重，跑完整评估，返回 (score_total, grade)"""
+    policy.save(tmp_path, version=0)
+    from eval_model import run_eval
+    data = run_eval(tmp_path, 'easy=2,normal=2,hard=4')
+    if not data:
+        return None, None
+    sc = data['score']
+    return sc['total'], sc['grade']
 
 
 def write_status(data):
@@ -325,11 +312,11 @@ def write_status(data):
         json.dump(data, f)
 
 
-def append_history(games, wr, avg):
-    """RL 评估历史（波形图数据源）"""
+def append_history(games, score, grade, avg):
+    """RL 评估历史（波形图数据源）：记录综合测试得分"""
     os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
     with open(HISTORY_FILE, 'a', encoding='utf-8') as f:
-        f.write(json.dumps({'games': games, 'winRate': round(wr, 3),
+        f.write(json.dumps({'games': games, 'score': score, 'grade': grade,
                             'avgReward': round(avg, 3),
                             'ts': time.strftime('%Y-%m-%d %H:%M:%S')}) + '\n')
 
@@ -374,8 +361,14 @@ def main():
     rewards = []
     batch = []
     t0 = time.time()
-    base_wr = base_win_rate()  # 原模型（BC 基础）vs hard 胜率（波形图基准线）
-    print(f'原模型 vs hard 基准胜率: {base_wr}', flush=True)
+    base_wr = base_win_rate()  # 原模型（BC 基础）vs hard 胜率（保留参考）
+    base_score = None
+    try:
+        if os.path.exists(EVAL_FILE):
+            base_score = json.load(open(EVAL_FILE, encoding='utf-8')).get('score', {}).get('total')
+    except Exception:
+        pass
+    print(f'原模型 vs hard 基准胜率: {base_wr}  综合评分: {base_score}', flush=True)
 
     while True:
         if os.path.exists(STOP_FILE):
@@ -390,17 +383,17 @@ def main():
         total_games += 1
         # 达到目标局数 → 自动停止（优雅保存）
         if target_games > 0 and total_games >= target_games:
-            wr = eval_vs_hard(policy, games=10)
+            score, grade = eval_model_score(policy)
             avg = float(np.mean(rewards[-50:])) if rewards else 0
-            append_history(total_games, wr, avg)
+            append_history(total_games, score, grade, avg)
             policy.save(RL_WEIGHTS, version=rl_version, base_version=base_version,
                         extra={'games': total_games, 'avgReward': round(avg, 3),
-                               'winRateVsHard': round(wr, 3), 'targetGames': target_games})
+                               'score': score, 'grade': grade, 'targetGames': target_games})
             write_status({'state': 'stopped', 'games': total_games, 'avgReward': round(avg, 3),
-                          'winRateVsHard': round(wr, 3), 'baseWinRate': base_wr,
+                          'score': score, 'grade': grade, 'baseWinRate': base_wr, 'baseScore': base_score,
                           'targetGames': target_games,
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
-            print(f'目标局数 {target_games} 达成，自动停止。vs hard {wr:.0%}', flush=True)
+            print(f'目标局数 {target_games} 达成，自动停止。综合分 {score}（{grade}）', flush=True)
             return
         # 奖励：胜负 ±1（我方=policy 在玩家0）
         R = 1.0 if winner == 0 else -1.0
@@ -416,20 +409,22 @@ def main():
             opponent = policy.clone()
         # 定期评估 + 保存
         if total_games % EVAL_EVERY == 0:
-            wr = eval_vs_hard(policy, games=10)
+            score, grade = eval_model_score(policy)
             avg = float(np.mean(rewards[-EVAL_EVERY:])) if rewards else 0
-            print(f'[{total_games}局] 近{EVAL_EVERY}局均奖 {avg:.2f} vs hard {wr:.0%} 耗时{(time.time()-t0)/60:.1f}m', flush=True)
-            append_history(total_games, wr, avg)  # 波形图历史
+            print(f'[{total_games}局] 均奖 {avg:.2f} 综合分 {score}（{grade}） 耗时{(time.time()-t0)/60:.1f}m', flush=True)
+            append_history(total_games, score, grade, avg)  # 波形图历史（综合得分）
             policy.save(RL_WEIGHTS, version=rl_version, base_version=base_version,
-                        extra={'games': total_games, 'avgReward': round(avg, 3), 'winRateVsHard': round(wr, 3)})
+                        extra={'games': total_games, 'avgReward': round(avg, 3),
+                               'score': score, 'grade': grade})
             write_status({'state': 'running', 'games': total_games, 'avgReward': round(avg, 3),
-                          'winRateVsHard': round(wr, 3), 'rlVersion': rl_version,
-                          'baseVersion': base_version, 'baseWinRate': base_wr,
+                          'score': score, 'grade': grade, 'rlVersion': rl_version,
+                          'baseVersion': base_version, 'baseWinRate': base_wr, 'baseScore': base_score,
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
         elif total_games % SAVE_EVERY == 0:
             write_status({'state': 'running', 'games': total_games,
                           'avgReward': round(float(np.mean(rewards[-SAVE_EVERY:])) if rewards else 0, 3),
-                          'rlVersion': rl_version, 'baseVersion': base_version, 'baseWinRate': base_wr,
+                          'rlVersion': rl_version, 'baseVersion': base_version,
+                          'baseWinRate': base_wr, 'baseScore': base_score,
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
 
 

@@ -93,21 +93,17 @@ def compute_score(summary, bench, gs, results):
     return {'total': total, 'max': 100, 'grade': grade, 'items': items}
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--games', default='easy=3,normal=3,hard=5',
-                    help='各对手每侧局数，如 easy=3,normal=3,hard=5')
-    args = ap.parse_args()
-    if not os.path.exists(WEIGHTS):
-        print('没有权重文件，跳过评估')
-        return
+def run_eval(weights_path, games_spec='easy=3,normal=3,hard=5', out_path=None):
+    """完整评估（对局 + 能力考试 + 综合评分），返回 data dict；out_path 非空则落盘"""
+    if not os.path.exists(weights_path):
+        return None
     model_ver = 0
     try:
-        model_ver = int(json.load(open(WEIGHTS, encoding='utf-8')).get('version', 0))
+        model_ver = int(json.load(open(weights_path, encoding='utf-8')).get('version', 0))
     except Exception:
         pass
     plan = []
-    for kv in args.games.split(','):
+    for kv in games_spec.split(','):
         name, n = kv.split('=')
         plan.append((name, int(n)))
 
@@ -118,7 +114,7 @@ def main():
             wins = 0
             turns = []
             for i in range(n):
-                m = ModelAi(WEIGHTS, seed=i * 7 + side * 101)
+                m = ModelAi(weights_path, seed=i * 7 + side * 101)
                 o = AimAi(opp, seed=i * 13 + side * 37)
                 if side == 0:
                     w, tc, st, md = play(m, o, seed=i)
@@ -138,7 +134,6 @@ def main():
                 'wins': wins, 'winRate': round(wins / n, 2),
                 'avgTurns': round(sum(turns) / len(turns), 1) if turns else 0,
             })
-            print(f'vs {opp} side={side}: {wins}/{n} 胜率{wins / n:.0%} 均回合{sum(turns) / len(turns) if turns else 0:.0f}')
 
     def wr(r): return r['winRate'] if r['games'] else 0
     summary = {
@@ -158,7 +153,6 @@ def main():
         'totalGames': sum(r['games'] for r in results),
         'results': results,
         'summary': summary,
-        # 对局统计（模型表现特征）
         'gameStats': {
             'avgKills': round(agg['kills'] / agg['n'], 1) if agg['n'] else 0,
             'avgLosses': round(agg['losses'] / agg['n'], 1) if agg['n'] else 0,
@@ -166,19 +160,25 @@ def main():
             'avgTurns': round(agg['turns'] / agg['n'], 1) if agg['n'] else 0,
             'maxDigit': agg['maxDigit'],
         },
-        # 能力基准测试（固定局面考试：进攻/防守/经济/战术）
-        'bench': run_bench(WEIGHTS),
-        # 综合评分（0-100 分制 + 分项依据/标准 + 评级），依赖上面字段，最后填
+        'bench': run_bench(weights_path),
         'score': None,
     }
     data['score'] = compute_score(summary, data['bench'], data['gameStats'], results)
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    with open(OUT, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=1)
+    if out_path:
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=1)
     b = data['bench']
-    print(f'评估完成 → {OUT}  总体胜率 {summary["overall"]:.0%}（左 {summary["asLeft"]:.0%} / 右 {summary["asRight"]:.0%}）')
-    print(f'能力考试 {b["passRate"]:.0%}：' +
-          ' '.join(f'{k} {v["rate"]:.0%}' for k, v in b['byCat'].items()))
+    print(f'评估完成 总体胜率 {summary["overall"]:.0%} 能力考试 {b["passRate"]:.0%} 综合分 {data["score"]["total"]}（{data["score"]["grade"]}）')
+    return data
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--games', default='easy=3,normal=3,hard=5',
+                    help='各对手每侧局数，如 easy=3,normal=3,hard=5')
+    args = ap.parse_args()
+    run_eval(WEIGHTS, args.games, OUT)
 
 
 if __name__ == '__main__':
