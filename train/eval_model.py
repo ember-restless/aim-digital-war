@@ -53,6 +53,46 @@ def play(ai0, ai1, seed=0, max_guard=600):
     return g.winner, g.turn_count, g.stats, max_digit
 
 
+# ── 综合评分（0-100）：对战 40 + 能力 40 + 运营 20，每项带得分依据与判定标准 ──
+def compute_score(summary, bench, gs, results):
+    def wr(opp):
+        rr = [r for r in results if r['opponent'] == opp]
+        return sum(r['wins'] for r in rr) / sum(r['games'] for r in rr) if rr and sum(r['games'] for r in rr) else 0
+
+    items = []
+
+    def add(key, name, score, mx, basis, std):
+        items.append({'key': key, 'name': name, 'score': round(score, 1), 'max': mx,
+                      'basis': basis, 'std': std})
+
+    # 对战（40）
+    for opp, wt, cut in (('easy', 8, 1.5), ('normal', 12, 2), ('hard', 20, 4)):
+        r = wr(opp)
+        s = max(0, wt - max(0, (1 - r)) * 10 * cut)
+        add('vs' + opp.capitalize(), f'对战·{opp}', s, wt,
+            f'胜率 {r:.0%}', f'100% 胜率满分 {wt} 分；每降 10% 扣 {cut} 分')
+    # 能力（40，每类 10）
+    for cat, key in (('进攻', 'atk'), ('防守', 'def'), ('经济', 'eco'), ('战术', 'tac')):
+        c = bench['byCat'].get(cat, {'score': 0, 'total': 0})
+        rate = c['score'] / c['total'] if c['total'] else 0
+        add(key, f'能力·{cat}', rate * 10, 10,
+            f'{c["score"]}/{c["total"]} 题通过', '通过率 × 10 分')
+    # 运营（20）
+    kd = gs['avgKills'] / gs['avgLosses'] if gs['avgLosses'] else 9.9
+    add('eco', '运营·造兵效率', min(5, 1 + gs['avgProduce'] * 2), 5,
+        f'平均造兵 {gs["avgProduce"]}', '≥2 满分 5；每少 0.5 扣 1')
+    add('kd', '运营·攻守效率', min(5, 1 + kd * 2.5), 5,
+        f'击杀/损失 = {gs["avgKills"]}/{gs["avgLosses"]} = {kd:.2f}', 'K/D≥1.6 满分；≥1 得 3.5；≥0.5 得 2')
+    add('dev', '运营·发展上限', min(5, 1 + max(0, gs['maxDigit'] - 5)), 5,
+        f'单局最高数字 {gs["maxDigit"]}', '达到 9 满分 5；8 得 4；7 得 3；6 得 2')
+    add('dur', '运营·持久能力', min(5, 1 + gs['avgTurns'] / 8), 5,
+        f'平均回合 {gs["avgTurns"]}', '≥35 回合满分 5；每少 7 扣 1')
+
+    total = round(sum(i['score'] for i in items), 1)
+    grade = 'S' if total >= 90 else 'A' if total >= 75 else 'B' if total >= 60 else 'C' if total >= 45 else 'D'
+    return {'total': total, 'max': 100, 'grade': grade, 'items': items}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--games', default='easy=3,normal=3,hard=5',
@@ -128,7 +168,10 @@ def main():
         },
         # 能力基准测试（固定局面考试：进攻/防守/经济/战术）
         'bench': run_bench(WEIGHTS),
+        # 综合评分（0-100 分制 + 分项依据/标准 + 评级），依赖上面字段，最后填
+        'score': None,
     }
+    data['score'] = compute_score(summary, data['bench'], data['gameStats'], results)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=1)

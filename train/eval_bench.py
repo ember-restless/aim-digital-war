@@ -80,6 +80,26 @@ CASES.append({'name': '盾兵屏障：远程不打无效目标', 'cat': '进攻'
               'expect': 'move', 'check': type_match('move')})
 
 
+def build_snipe():
+    g = g16()
+    g.cells[2] = AimCell(3, o=0)   # 我方弓手 3（射程 2）
+    g.cells[4] = AimCell(4, o=1)   # 敌方 4 在 2 格外（白嫖）
+    g.cells[7] = AimCell(8, o=1)
+    return g
+CASES.append({'name': '远程白嫖：弓手射程内打敌方', 'cat': '进攻', 'build': build_snipe,
+              'expect': 'attack', 'check': type_match('attack')})
+
+
+def build_cavalry():
+    g = g16()
+    g.cells[3] = AimCell(2, o=0)   # 我方骑兵 2（一回合两步）
+    g.cells[6] = AimCell(1, o=1)   # 敌方 1 在前方（两步冲到 5，逼近）
+    g.cells[7] = AimCell(8, o=1)
+    return g
+CASES.append({'name': '骑兵推进：两步兵种该多走', 'cat': '进攻', 'build': build_cavalry,
+              'expect': 'move', 'check': lambda a: a.get('type') == 'move' and a.get('steps', 1) >= 2})
+
+
 # ═══ 防守 ═══
 def build_defend_base():
     g = g16()
@@ -109,6 +129,25 @@ def build_no_bridge():
     return g
 CASES.append({'name': '重单位不上桥（会塌）', 'cat': '防守', 'build': build_no_bridge,
               'expect': 'endTurn', 'check': type_match('endTurn')})
+
+
+def build_retreat():
+    g = g16()
+    g.cells[3] = AimCell(4, o=0)   # 我方 4
+    g.cells[2] = AimCell(5, o=1)   # 敌方 5 在吞噬范围（4<5 会被吃）
+    return g
+CASES.append({'name': '撤退：躲开敌方吞噬范围', 'cat': '防守', 'build': build_retreat,
+              'expect': 'move', 'check': type_match('move')})
+
+
+def build_protect_base():
+    g = g16()
+    g.cells[0] = AimCell(8, o=0)   # 我方基地
+    g.cells[1] = AimCell(3, o=0)   # 我方 3
+    g.cells[4] = AimCell(4, o=1)   # 敌方炮手 4（射程 3：可打 1）
+    return g
+CASES.append({'name': '保基地：清除能打到基地的炮手', 'cat': '防守', 'build': build_protect_base,
+              'expect': 'attack', 'check': type_match('attack')})
 
 
 # ═══ 经济 ═══
@@ -141,6 +180,25 @@ CASES.append({'name': '合成 9 号指挥部', 'cat': '经济', 'build': build_m
               'expect': 'devour', 'check': type_match('devour')})
 
 
+def build_expand():
+    g = g16()
+    g.cells[0] = AimCell(8, o=0)
+    g.cells[1] = AimCell(8, o=0)   # 第二个基地（多造兵点）
+    g.phase = 'produce'
+    g.produce_left = 2
+    return g
+CASES.append({'name': '扩张：多个基地都要造兵', 'cat': '经济', 'build': build_expand,
+              'expect': 'produce', 'check': type_match('produce')})
+
+
+def build_no_split_base():
+    g = g16()
+    g.cells[2] = AimCell(8, o=0)   # 我方基地（别拆）
+    return g
+CASES.append({'name': '不拆基地/指挥部', 'cat': '经济', 'build': build_no_split_base,
+              'expect': 'endTurn', 'check': lambda a: a.get('type') != 'split'})
+
+
 # ═══ 战术 ═══
 def build_dismantle_bridge():
     g = g16()
@@ -170,6 +228,28 @@ def build_split_light():
     return g
 CASES.append({'name': '桥前拆分：拆出轻单位过桥', 'cat': '战术', 'build': build_split_light,
               'expect': 'split', 'check': type_match('split')})
+
+
+def build_hold_bridge():
+    g = g16()
+    g.cells[2] = AimCell(1, o=0)   # 我方小兵 1
+    g.cells[3] = AimCell(0, bridge=True)  # 桥
+    g.cells[4] = AimCell(3, o=0)   # 我方弓手在桥后（远程能越过桥打）
+    g.cells[6] = AimCell(2, o=1)   # 敌方 2 在射程内（弓手 3 射程 2：4→5→6）
+    g.cells[7] = AimCell(8, o=1)
+    return g
+CASES.append({'name': '桥头堡：隔桥远程输出', 'cat': '战术', 'build': build_hold_bridge,
+              'expect': 'attack', 'check': type_match('attack')})
+
+
+def build_use_roller():
+    g = g16()
+    g.cells[2] = AimCell(6, o=0, auto=True)  # 我方滚木（向右滚 2→3→4）
+    g.cells[3] = AimCell(4, o=1)   # 敌方 4 在滚木第 1 格（被碾：4 受 6 伤溢出 → 变 2+桥）
+    g.cells[7] = AimCell(8, o=1)
+    return g
+CASES.append({'name': '滚木开路：敌人会自己碾，别浪费行动', 'cat': '战术', 'build': build_use_roller,
+              'expect': 'move/endTurn', 'check': lambda a: a.get('type') in ('move', 'endTurn')})
 
 
 def run_bench(model_path):
