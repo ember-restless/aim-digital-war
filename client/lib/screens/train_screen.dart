@@ -10,10 +10,13 @@ import 'package:http/http.dart' as http;
 
 import '../core/bgm_manager.dart';
 import '../core/config.dart';
+import '../core/settings_store.dart';
 import '../game/ai.dart';
 import '../net/local_socket.dart';
+import '../net/server_list.dart';
 import '../train/train_ai.dart';
 import 'game_screen.dart';
+import 'lobby_screen.dart';
 
 const _ink = Color(0xFF11110F);
 const _paper = Color(0xFFFFF5DC);
@@ -96,6 +99,20 @@ class _TrainScreenState extends State<TrainScreen> {
   void _toggleDuoMode() {
     setState(() => _duoMode = !_duoMode);
     _newGame();
+  }
+
+  // 联机对战：跳转联机大厅（服务器创建/加入房间，真人对局数据服务器端记录，AI 都学）
+  void _enterOnline() {
+    final server = AimServer(
+        id: 'aim',
+        name: 'AIM 服务器',
+        host: AppConfig.serverUrl.replaceAll(RegExp(r'^https?://'), '').split(':')[0],
+        port: int.tryParse(AppConfig.serverUrl.split(':').last) ?? 5000,
+        players: 0,
+        maxPlayers: 99,
+        version: '0.3.0');
+    Navigator.push(context, MaterialPageRoute(
+        builder: (_) => LobbyScreen(server: server, playerName: SettingsStore.playerName, packId: 'default')));
   }
 
   // 对局结束：上传数据 + 刷新统计
@@ -229,6 +246,19 @@ class _TrainScreenState extends State<TrainScreen> {
         const Spacer(),
         if (_uploadMsg.isNotEmpty) _pt(_uploadMsg, 11, _green),
         const SizedBox(width: 8),
+        GestureDetector(
+          onTap: _enterOnline,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFF24312A),
+              border: Border.all(color: const Color(0xFF3E6B52)),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: _pt('🌐 联机', 12, _green),
+          ),
+        ),
+        const SizedBox(width: 6),
         GestureDetector(
           onTap: _toggleDuoMode,
           child: Container(

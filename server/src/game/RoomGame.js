@@ -17,6 +17,11 @@ class RoomGame {
     this.allowOwnRollerAttack = true; // 规则开关：己方能否攻击己方滚木（创建房间时定，默认开）
     this.hostSide = 'left';  // 房主选的边
     this.roomOwnerSocket = null;
+    // ── 训练数据记录（牢大定：真人对局 AI 都学）──
+    this.recordMode = true;   // 联机/热座真人对局都记录双方棋谱
+    this.recordSteps = [];
+    this._recordFlushed = false;
+    this.onRecorded = null;   // 对局结束回调（index.js 写 games.jsonl + 触发自动训练）
   }
 
   isHotseat() {
@@ -116,6 +121,7 @@ class RoomGame {
         this.state.winner = 1 - i;
         this.state.log.push(`玩家${i}掉线超时，玩家${1 - i}获胜`);
         this.status = 'ended';
+        this._flushRecord();
         changed = true;
       }
     }
@@ -217,9 +223,25 @@ class RoomGame {
 
   // 玩家执行行动（服务端权威判定；手动 endTurn 延后滚木 → 逐步驱动，对齐热座）
   handleAction(playerIdx, action) {
+    // 操作前快照（训练记录用；与训练场 local_socket 同格式）
+    const snapTurn = this.state.turn, snapPhase = this.state.phase;
+    const snapPoints = this.state.points, snapProduce = this.state.produceLeft;
+    const snapCells = this.state.map.cells.map(c =>
+      [c.v, c.o ?? -1, c.bridge ? 1 : 0, c.onBridge ? 1 : 0, c.auto ? 1 : 0]);
     const res = R.applyAction(this.state, playerIdx, action, true);
     if (!res.ok) return res;
-    if (this.state.winner !== null) this.status = 'ended';
+    if (this.recordMode && this.state) {
+      // 记录操作前状态 + 动作 + 操作者（含最后一步；滚木自动结算不记录，与训练数据一致）
+      this.recordSteps.push({
+        cells: snapCells, turn: snapTurn, phase: snapPhase,
+        points: snapPoints, produceLeft: snapProduce,
+        action, owner: playerIdx,
+      });
+    }
+    if (this.state.winner !== null) {
+      this.status = 'ended';
+      this._flushRecord();
+    }
     return res;
   }
 
@@ -229,8 +251,26 @@ class RoomGame {
     if (!this.state) return null;
     const acts = R.rollStepOnce(this.state, this.state.turn);
     if (acts == null) R.clearPendingRoll(this.state);
-    if (this.state.winner !== null) this.status = 'ended';
+    if (this.state.winner !== null) {
+      this.status = 'ended';
+      this._flushRecord();
+    }
     return acts;
+  }
+
+  // 对局结束：把双方棋谱交给 index.js（写 games.jsonl + 触发自动训练，AI 都学）
+  _flushRecord() {
+    if (!this.recordMode || this._recordFlushed || this.recordSteps.length === 0) return;
+    this._recordFlushed = true;
+    if (this.onRecorded) {
+      this.onRecorded({
+        winner: this.state.winner,
+        turns: this.state.turnCount || 0,
+        limit: this.limit,
+        steps: this.recordSteps,
+      });
+    }
+    this.recordSteps = [];
   }
 
   // 待滚滚木（deferRoll 模式：endTurn 后还没滚完）

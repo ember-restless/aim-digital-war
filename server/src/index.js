@@ -276,6 +276,20 @@ io.on('connection', (socket) => {
       password ? String(password).slice(0, 12) : null,
       title ? String(title).slice(0, 16) : null);
     room.allowOwnRollerAttack = allowOwnRollerAttack !== false; // 规则开关：默认开（保持「敌我皆可」）
+    // 真人对局记录：双方棋谱写训练数据，自动训练吸收（牢大定：AI 都学）
+    room.onRecorded = (data) => {
+      try {
+        const dir = path.join(__dirname, '..', '..', 'train_data');
+        fs.mkdirSync(dir, { recursive: true });
+        fs.appendFileSync(path.join(dir, 'games.jsonl'),
+          JSON.stringify({ v: VERSION, winner: data.winner, turns: data.turns,
+                           limit: data.limit, steps: data.steps, ts: Date.now() }) + '\n');
+        trainStatsCache = null;
+        triggerTrain();
+      } catch (e) {
+        console.error('记录联机对局失败:', e);
+      }
+    };
     if (side === 'right') room.setHostSide('right');
     const idx = room.isHotseat() ? 0 : (side === 'right' ? 1 : 0);
     const res = room.addPlayer(socket.id, name, idx);
