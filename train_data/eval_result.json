@@ -1,39 +1,39 @@
 {
- "ts": "2026-08-27 16:02:37",
- "modelVersion": 70,
+ "ts": "2026-08-27 16:48:24",
+ "modelVersion": 100,
  "totalGames": 32,
  "results": [
   {
    "opponent": "easy",
    "side": 0,
    "games": 4,
-   "wins": 3,
-   "winRate": 0.75,
-   "avgTurns": 26.2
+   "wins": 2,
+   "winRate": 0.5,
+   "avgTurns": 24.5
   },
   {
    "opponent": "easy",
    "side": 1,
    "games": 4,
-   "wins": 3,
-   "winRate": 0.75,
-   "avgTurns": 43.0
+   "wins": 4,
+   "winRate": 1.0,
+   "avgTurns": 45.2
   },
   {
    "opponent": "normal",
    "side": 0,
    "games": 4,
-   "wins": 1,
-   "winRate": 0.25,
-   "avgTurns": 21.8
+   "wins": 2,
+   "winRate": 0.5,
+   "avgTurns": 20.2
   },
   {
    "opponent": "normal",
    "side": 1,
    "games": 4,
-   "wins": 1,
-   "winRate": 0.25,
-   "avgTurns": 48.8
+   "wins": 4,
+   "winRate": 1.0,
+   "avgTurns": 57.2
   },
   {
    "opponent": "hard",
@@ -41,41 +41,41 @@
    "games": 8,
    "wins": 1,
    "winRate": 0.12,
-   "avgTurns": 30.6
+   "avgTurns": 28.4
   },
   {
    "opponent": "hard",
    "side": 1,
    "games": 8,
-   "wins": 3,
-   "winRate": 0.38,
-   "avgTurns": 50.2
+   "wins": 2,
+   "winRate": 0.25,
+   "avgTurns": 38.1
   }
  ],
  "summary": {
-  "overall": 0.38,
+  "overall": 0.47,
   "asLeft": 0.31,
-  "asRight": 0.44,
+  "asRight": 0.62,
   "vsEasy": 0.75,
-  "vsNormal": 0.25,
-  "vsHard": 0.25
+  "vsNormal": 0.75,
+  "vsHard": 0.19
  },
  "gameStats": {
-  "avgKills": 1.8,
-  "avgLosses": 1.8,
-  "avgProduce": 1.4,
-  "avgTurns": 37.7,
+  "avgKills": 1.6,
+  "avgLosses": 1.2,
+  "avgProduce": 2.2,
+  "avgTurns": 35.0,
   "maxDigit": 8
  },
  "bench": {
-  "score": 10,
+  "score": 11,
   "total": 20,
-  "passRate": 0.5,
+  "passRate": 0.55,
   "byCat": {
    "进攻": {
-    "score": 3,
+    "score": 4,
     "total": 5,
-    "rate": 0.6
+    "rate": 0.8
    },
    "防守": {
     "score": 2,
@@ -97,8 +97,8 @@
    {
     "name": "斩杀：5 打 2 一击消灭",
     "cat": "进攻",
-    "ok": false,
-    "chosen": "devour",
+    "ok": true,
+    "chosen": "attack",
     "expect": "attack"
    },
    {
@@ -132,15 +132,15 @@
    {
     "name": "防守：清除逼近基地的敌人",
     "cat": "防守",
-    "ok": false,
-    "chosen": "split",
+    "ok": true,
+    "chosen": "attack",
     "expect": "attack"
    },
    {
     "name": "走位：躲开敌方滚木死亡区",
     "cat": "防守",
-    "ok": true,
-    "chosen": "move",
+    "ok": false,
+    "chosen": "split",
     "expect": "move"
    },
    {
@@ -161,7 +161,7 @@
     "name": "保基地：清除能打到基地的炮手",
     "cat": "防守",
     "ok": false,
-    "chosen": "split",
+    "chosen": "move",
     "expect": "attack"
    },
    {
@@ -175,14 +175,14 @@
     "name": "合成 8 号基地",
     "cat": "经济",
     "ok": false,
-    "chosen": "split",
+    "chosen": "attack",
     "expect": "devour"
    },
    {
     "name": "合成 9 号指挥部",
     "cat": "经济",
     "ok": false,
-    "chosen": "split",
+    "chosen": "attack",
     "expect": "devour"
    },
    {
@@ -237,9 +237,9 @@
   ]
  },
  "score": {
-  "total": 40.5,
+  "total": 51.5,
   "max": 100,
-  "grade": "D",
+  "grade": "C",
   "items": [
    {
     "key": "vsEasy",
@@ -252,9 +252,9 @@
    {
     "key": "vsNormal",
     "name": "对战·normal",
-    "score": 0,
+    "score": 7.0,
     "max": 12,
-    "basis": "胜率 25%",
+    "basis": "胜率 75%",
     "std": "100% 胜率满分 12 分；每降 10% 扣 2 分"
    },
    {
@@ -262,15 +262,15 @@
     "name": "对战·hard",
     "score": 0,
     "max": 20,
-    "basis": "胜率 25%",
+    "basis": "胜率 19%",
     "std": "100% 胜率满分 20 分；每降 10% 扣 4 分"
    },
    {
     "key": "atk",
     "name": "能力·进攻",
-    "score": 6.0,
+    "score": 8.0,
     "max": 10,
-    "basis": "3/5 题通过",
+    "basis": "4/5 题通过",
     "std": "通过率 × 10 分"
    },
    {
@@ -300,17 +300,17 @@
    {
     "key": "eco",
     "name": "运营·造兵效率",
-    "score": 3.8,
+    "score": 5,
     "max": 5,
-    "basis": "平均造兵 1.4",
+    "basis": "平均造兵 2.2",
     "std": "≥2 满分 5；每少 0.5 扣 1"
    },
    {
     "key": "kd",
     "name": "运营·攻守效率",
-    "score": 3.5,
+    "score": 4.3,
     "max": 5,
-    "basis": "击杀/损失 = 1.8/1.8 = 1.00",
+    "basis": "击杀/损失 = 1.6/1.2 = 1.33",
     "std": "K/D≥1.6 满分；≥1 得 3.5；≥0.5 得 2"
    },
    {
@@ -326,7 +326,7 @@
     "name": "运营·持久能力",
     "score": 5,
     "max": 5,
-    "basis": "平均回合 37.7",
+    "basis": "平均回合 35.0",
     "std": "≥35 回合满分 5；每少 7 扣 1"
    }
   ]

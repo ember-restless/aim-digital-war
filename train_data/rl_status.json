@@ -1,1 +1,1 @@
-{"state": "stopped", "games": 5000, "avgReward": 0.112, "score": 39.1, "grade": "D", "baseWinRate": 0.38, "baseScore": 40.5, "targetGames": 5000, "ts": "2026-08-27 16:02:25"}
+{"state": "stopped", "games": 15000, "avgReward": 0.135, "score": 49.4, "grade": "C", "baseWinRate": 0.12, "baseScore": 41.5, "targetGames": 15000, "ts": "2026-08-27 16:51:25"}
