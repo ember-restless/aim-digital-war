@@ -1,63 +1,183 @@
 {
- "ts": "2026-08-27 13:38:53",
- "modelVersion": 10,
- "totalGames": 32,
+ "ts": "2026-08-27 13:46:07",
+ "modelVersion": 12,
+ "totalGames": 16,
  "results": [
   {
    "opponent": "easy",
    "side": 0,
-   "games": 4,
+   "games": 2,
    "wins": 2,
-   "winRate": 0.5,
-   "avgTurns": 38.5
+   "winRate": 1.0,
+   "avgTurns": 53.0
   },
   {
    "opponent": "easy",
    "side": 1,
-   "games": 4,
-   "wins": 2,
+   "games": 2,
+   "wins": 1,
    "winRate": 0.5,
-   "avgTurns": 50.0
+   "avgTurns": 40.5
   },
   {
    "opponent": "normal",
    "side": 0,
-   "games": 4,
-   "wins": 0,
-   "winRate": 0.0,
-   "avgTurns": 21.0
+   "games": 2,
+   "wins": 1,
+   "winRate": 0.5,
+   "avgTurns": 32.0
   },
   {
    "opponent": "normal",
    "side": 1,
+   "games": 2,
+   "wins": 1,
+   "winRate": 0.5,
+   "avgTurns": 51.0
+  },
+  {
+   "opponent": "hard",
+   "side": 0,
    "games": 4,
    "wins": 1,
    "winRate": 0.25,
-   "avgTurns": 55.5
-  },
-  {
-   "opponent": "hard",
-   "side": 0,
-   "games": 8,
-   "wins": 0,
-   "winRate": 0.0,
-   "avgTurns": 25.5
+   "avgTurns": 30.0
   },
   {
    "opponent": "hard",
    "side": 1,
-   "games": 8,
-   "wins": 2,
-   "winRate": 0.25,
-   "avgTurns": 36.4
+   "games": 4,
+   "wins": 0,
+   "winRate": 0.0,
+   "avgTurns": 30.0
   }
  ],
  "summary": {
-  "overall": 0.22,
-  "asLeft": 0.12,
-  "asRight": 0.31,
-  "vsEasy": 0.5,
-  "vsNormal": 0.12,
+  "overall": 0.38,
+  "asLeft": 0.5,
+  "asRight": 0.25,
+  "vsEasy": 0.75,
+  "vsNormal": 0.5,
   "vsHard": 0.12
+ },
+ "gameStats": {
+  "avgKills": 1.8,
+  "avgLosses": 2.1,
+  "avgProduce": 0.9,
+  "avgTurns": 37.1,
+  "maxDigit": 8
+ },
+ "bench": {
+  "score": 6,
+  "total": 12,
+  "passRate": 0.5,
+  "byCat": {
+   "进攻": {
+    "score": 2,
+    "total": 3,
+    "rate": 0.67
+   },
+   "防守": {
+    "score": 0,
+    "total": 3,
+    "rate": 0.0
+   },
+   "经济": {
+    "score": 1,
+    "total": 3,
+    "rate": 0.33
+   },
+   "战术": {
+    "score": 3,
+    "total": 3,
+    "rate": 1.0
+   }
+  },
+  "details": [
+   {
+    "name": "斩杀：5 打 2 一击消灭",
+    "cat": "进攻",
+    "ok": true,
+    "chosen": "attack",
+    "expect": "attack"
+   },
+   {
+    "name": "攻击敌方滚木",
+    "cat": "进攻",
+    "ok": true,
+    "chosen": "attack",
+    "expect": "attack"
+   },
+   {
+    "name": "盾兵屏障：远程不打无效目标",
+    "cat": "进攻",
+    "ok": false,
+    "chosen": "attack",
+    "expect": "move"
+   },
+   {
+    "name": "防守：清除逼近基地的敌人",
+    "cat": "防守",
+    "ok": false,
+    "chosen": "split",
+    "expect": "attack"
+   },
+   {
+    "name": "走位：躲开敌方滚木死亡区",
+    "cat": "防守",
+    "ok": false,
+    "chosen": "split",
+    "expect": "move"
+   },
+   {
+    "name": "重单位不上桥（会塌）",
+    "cat": "防守",
+    "ok": false,
+    "chosen": "split",
+    "expect": "endTurn"
+   },
+   {
+    "name": "造兵攻击：基地前有敌人",
+    "cat": "经济",
+    "ok": true,
+    "chosen": "produce",
+    "expect": "produce"
+   },
+   {
+    "name": "合成 8 号基地",
+    "cat": "经济",
+    "ok": false,
+    "chosen": "attack",
+    "expect": "devour"
+   },
+   {
+    "name": "合成 9 号指挥部",
+    "cat": "经济",
+    "ok": false,
+    "chosen": "attack",
+    "expect": "devour"
+   },
+   {
+    "name": "小兵过桥拆桥",
+    "cat": "战术",
+    "ok": true,
+    "chosen": "move",
+    "expect": "move"
+   },
+   {
+    "name": "喂滚木：1 送进滚木第 1 格升级 5",
+    "cat": "战术",
+    "ok": true,
+    "chosen": "move",
+    "expect": "move"
+   },
+   {
+    "name": "桥前拆分：拆出轻单位过桥",
+    "cat": "战术",
+    "ok": true,
+    "chosen": "split",
+    "expect": "split"
+   }
+  ]
  }
 }
