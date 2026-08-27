@@ -14,6 +14,35 @@ const DOWNLOAD_DIR = path.join(__dirname, '..', 'public', 'downloads');
 const CFG = require('./config.js');
 const VERSION = CFG.APP_VERSION;
 
+// ── AI 训练场统计（训练数据局数/步数/模型版本）──
+let trainStatsCache = null;
+function trainStats() {
+  if (trainStatsCache) return trainStatsCache;
+  let games = 0, steps = 0;
+  const dataFile = path.join(__dirname, '..', '..', 'train_data', 'games.jsonl');
+  try {
+    if (fs.existsSync(dataFile)) {
+      const lines = fs.readFileSync(dataFile, 'utf8').trim().split('\n');
+      games = lines.length;
+      for (const l of lines) {
+        try { steps += (JSON.parse(l).steps || []).length; } catch (_) {}
+      }
+    }
+  } catch (_) {}
+  // 模型版本：权重文件 mtime 次数（每次部署 = 版本 +1）
+  let modelVersion = 0, modelUpdatedAt = null;
+  const wf = path.join(DOWNLOAD_DIR, 'train_weights.json');
+  try {
+    if (fs.existsSync(wf)) {
+      const w = JSON.parse(fs.readFileSync(wf, 'utf8'));
+      modelVersion = w.version || 1;
+      modelUpdatedAt = w.updatedAt || null;
+    }
+  } catch (_) {}
+  trainStatsCache = { games, steps, modelVersion, modelUpdatedAt };
+  return trainStatsCache;
+}
+
 // ---------- 游戏服务器（Socket.io 挂到单端口 server，定义在后面） ----------
 const io = new Server({ cors: { origin: '*' } });
 
@@ -522,6 +551,46 @@ const dlServer = http.createServer((req, res) => {
         res.end(JSON.stringify({ ok: false, msg: 'bad json' }));
       }
     });
+    return;
+  }
+  // ── AI 训练场：对局数据上传（JSONL 落盘，供行为克隆训练）──
+  if (pathname === '/api/train/upload') {
+    let body = '';
+    req.on('data', d => { body += d; if (body.length > 2 * 1024 * 1024) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const b = JSON.parse(body || '{}');
+        if (!b.steps || !Array.isArray(b.steps) || b.steps.length === 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: false, msg: 'empty steps' }));
+          return;
+        }
+        const dir = path.join(__dirname, '..', '..', 'train_data');
+        fs.mkdirSync(dir, { recursive: true });
+        const line = JSON.stringify({
+          v: VERSION,
+          winner: b.winner,
+          turns: b.turns,
+          limit: b.limit,
+          steps: b.steps,
+          ts: Date.now(),
+        });
+        fs.appendFileSync(path.join(dir, 'games.jsonl'), line + '\n');
+        // 统计缓存失效
+        trainStatsCache = null;
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, msg: 'bad json' }));
+      }
+    });
+    return;
+  }
+  // ── AI 训练场：统计（对局数 / 步数 / 模型版本）──
+  if (pathname === '/api/train/stats') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(trainStats()));
     return;
   }
   let url = decodeURIComponent(req.url.split('?')[0]);
