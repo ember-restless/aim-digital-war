@@ -27,6 +27,7 @@ class LocalAimSocket extends AIMSocket {
   int _aiSeq = 0;
   // ── 训练场记录模式：记录人类每步操作供行为克隆训练 ──
   bool recordMode = false;
+  bool duoMode = false; // 双人对战：两个真人轮流操作，记录双方棋谱（AI 都学）
   List<Map<String, dynamic>> humanSteps = [];
   // AI 决策可插拔（训练场用 TrainAi；空则用 aiLevel 的 AimAi）
   Map<String, dynamic>? Function(AimGame game)? aiDecider;
@@ -66,12 +67,14 @@ class LocalAimSocket extends AIMSocket {
         humanSteps = [];
       }
     }
-    onEvent?.call('game_state', game.viewFor(humanSide));
+    // 视角：双人模式跟随当前回合玩家（谁行动谁看到自己的合法操作）；单人固定人类视角
+    onEvent?.call('game_state', game.viewFor(duoMode ? game.turn : humanSide));
     _maybeDriveAi();
   }
 
   // AI 回合：延迟后决策 → 走统一 emit 入口（applyAction → _pushState 递归）
   void _maybeDriveAi() {
+    if (duoMode) return; // 双人对战：无 AI
     if (aiLevel == null && aiDecider == null) return;
     if (_disposed) return;
     if (game.winner != null) return;
@@ -92,8 +95,9 @@ class LocalAimSocket extends AIMSocket {
   }
 
   // 记录人类一步：applyAction 成功后调用（状态为操作前快照）
+  // 双人模式记录双方（owner=操作者），单人只记录人类侧
   void _recordHumanStep(Map<String, dynamic> action, int snapTurn, String? snapPhase,
-      int snapPoints, int snapProduce) {
+      int snapPoints, int snapProduce, int owner) {
     humanSteps.add({
       'cells': game.cells.map((c) => [c.v, c.o ?? -1, c.bridge ? 1 : 0, c.onBridge ? 1 : 0, c.auto ? 1 : 0]).toList(),
       'turn': snapTurn,
@@ -101,7 +105,7 @@ class LocalAimSocket extends AIMSocket {
       'points': snapPoints,
       'produceLeft': snapProduce,
       'action': action,
-      'owner': humanSide,
+      'owner': owner,
     });
   }
 
@@ -110,8 +114,8 @@ class LocalAimSocket extends AIMSocket {
     if (event == 'action') {
       if (game.winner != null) return;
       final action = (data as Map).cast<String, dynamic>();
-      // 记录模式：操作前快照（人类回合）
-      final rec = recordMode && game.turn == humanSide;
+      // 记录模式：双人记录双方，单人只记录人类回合
+      final rec = recordMode && (duoMode || game.turn == humanSide);
       final snapTurn = game.turn, snapPhase = game.phase;
       final snapPoints = game.points, snapProduce = game.produceLeft;
       // endTurn 延后滚木（deferRoll），由 roll_step 逐步驱动——规则算一步，动画播一步
@@ -121,7 +125,7 @@ class LocalAimSocket extends AIMSocket {
         return;
       }
       if (rec) {
-        _recordHumanStep(action, snapTurn, snapPhase, snapPoints, snapProduce);
+        _recordHumanStep(action, snapTurn, snapPhase, snapPoints, snapProduce, snapTurn);
       }
       if (res['repeatWarn'] == true) {
         // 第 2 次重复：提示「再重复一次将判负」

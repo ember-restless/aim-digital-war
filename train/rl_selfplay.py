@@ -28,7 +28,7 @@ HISTORY_FILE = os.path.join(BASE_DIR, 'train_data', 'rl_history.jsonl')  # RL �
 STOP_FILE = os.path.join(BASE_DIR, 'train', 'rl_stop')
 EVAL_FILE = os.path.join(BASE_DIR, 'train_data', 'eval_result.json')
 
-IN_DIM, HIDDEN, OUT = 53, 64, 97
+IN_DIM, HIDDEN, OUT = 53, 128, 97
 MAX_CELLS = 8
 GAMMA = 0.99
 LR = 1e-3              # 手写 SGD（2e-3 配强奖励震荡过拟合，1e-3 平衡）
@@ -89,11 +89,15 @@ class RlPolicy:
         self.temp = TEMP_BASE  # 采样温度（平台期自适应提高）
         if weights_path and os.path.exists(weights_path):
             w = json.load(open(weights_path, encoding='utf-8'))
-            self.w1 = np.array(w['w1'], dtype=np.float64).reshape(HIDDEN, IN_DIM)
+            # 维度从权重文件读取（64/128 单元都兼容）
+            self.in_dim = int(w.get('in', IN_DIM))
+            self.hidden = int(w.get('hidden', HIDDEN))
+            self.out = int(w.get('out', OUT))
+            self.w1 = np.array(w['w1'], dtype=np.float64).reshape(self.hidden, self.in_dim)
             self.b1 = np.array(w['b1'], dtype=np.float64)
-            self.w2 = np.array(w['w2'], dtype=np.float64).reshape(HIDDEN, HIDDEN)
+            self.w2 = np.array(w['w2'], dtype=np.float64).reshape(self.hidden, self.hidden)
             self.b2 = np.array(w['b2'], dtype=np.float64)
-            self.wo = np.array(w['wo'], dtype=np.float64).reshape(OUT, HIDDEN)
+            self.wo = np.array(w['wo'], dtype=np.float64).reshape(self.out, self.hidden)
             self.bo = np.array(w['bo'], dtype=np.float64)
             # 吞敌先验：BC 权重里吞敌槽 logit 天生偏低（人类数据吞敌少），
             # 给 8 个格子的「devour 敌」槽（i*12+8）加探索偏置，让 AI 敢于尝试吞敌。
@@ -106,12 +110,13 @@ class RlPolicy:
                     self.bo[i * 12 + 8] += DEVOUR_PRIOR
             # 价值头：BC 权重没有 → 新初始化
             if 'wv' in w:
-                self.wv = np.array(w['wv'], dtype=np.float64).reshape(1, HIDDEN)
+                self.wv = np.array(w['wv'], dtype=np.float64).reshape(1, self.hidden)
                 self.bv = np.array(w['bv'], dtype=np.float64)
             else:
-                self.wv = xavier(HIDDEN, 1, self.rng).T
+                self.wv = xavier(self.hidden, 1, self.rng).T
                 self.bv = np.zeros(1)
         else:
+            self.in_dim, self.hidden, self.out = IN_DIM, HIDDEN, OUT
             self.w1 = xavier(IN_DIM, HIDDEN, self.rng)
             self.b1 = np.zeros(HIDDEN)
             self.w2 = xavier(HIDDEN, HIDDEN, self.rng)
@@ -126,6 +131,9 @@ class RlPolicy:
         p.rng = np.random.default_rng(0)
         p.eps = self.eps
         p.temp = self.temp
+        p.in_dim = self.in_dim
+        p.hidden = self.hidden
+        p.out = self.out
         for k in ('w1', 'b1', 'w2', 'b2', 'wo', 'bo', 'wv', 'bv'):
             setattr(p, k, getattr(self, k).copy())
         return p
@@ -214,7 +222,7 @@ class RlPolicy:
         cands = []
         for a in playable:
             s = self.slot_of(a, flip, game)
-            if s is not None and s < OUT:
+            if s is not None and s < self.out:
                 slots.append(s)
                 cands.append(a)
         if not cands:
@@ -251,7 +259,7 @@ class RlPolicy:
         data = {
             'version': version if version is not None else 1,
             'updatedAt': time.strftime('%Y-%m-%d %H:%M:%S'),
-            'in': IN_DIM, 'hidden': HIDDEN, 'out': OUT,
+            'in': self.in_dim, 'hidden': self.hidden, 'out': self.out,
             'w1': [float(x) for x in self.w1.flatten()],
             'b1': [float(x) for x in self.b1],
             'w2': [float(x) for x in self.w2.flatten()],

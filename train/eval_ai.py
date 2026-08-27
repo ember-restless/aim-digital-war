@@ -15,7 +15,7 @@ sys.path.insert(0, '/root/aim/pc')
 from ai import AimAi
 
 IN_DIM = 53
-HIDDEN = 64
+HIDDEN = 128
 OUT = 97
 MAX_CELLS = 8
 
@@ -25,11 +25,15 @@ MAX_CELLS = 8
 class ModelAi:
     def __init__(self, weights_path, fallback_level='hard', seed=0):
         w = json.load(open(weights_path, 'r', encoding='utf-8'))
-        self.w1 = np.array(w['w1'], dtype=np.float64).reshape(HIDDEN, IN_DIM)
+        # 维度从权重文件读取（64/128 单元都兼容）
+        self.in_dim = int(w.get('in', IN_DIM))
+        self.hidden = int(w.get('hidden', HIDDEN))
+        self.out = int(w.get('out', OUT))
+        self.w1 = np.array(w['w1'], dtype=np.float64).reshape(self.hidden, self.in_dim)
         self.b1 = np.array(w['b1'], dtype=np.float64)
-        self.w2 = np.array(w['w2'], dtype=np.float64).reshape(HIDDEN, HIDDEN)
+        self.w2 = np.array(w['w2'], dtype=np.float64).reshape(self.hidden, self.hidden)
         self.b2 = np.array(w['b2'], dtype=np.float64)
-        self.wo = np.array(w['wo'], dtype=np.float64).reshape(OUT, HIDDEN)
+        self.wo = np.array(w['wo'], dtype=np.float64).reshape(self.out, self.hidden)
         self.bo = np.array(w['bo'], dtype=np.float64)
         self.fallback = AimAi(fallback_level, seed=seed)
 
@@ -102,7 +106,7 @@ class ModelAi:
         best, best_a = -1e18, None
         for a in playable:
             slot = self._slot(a, flip, game)
-            if slot is None or slot >= OUT:
+            if slot is None or slot >= self.out:
                 continue
             s = logits[slot]
             if s > best:

@@ -22,7 +22,7 @@ DATA_FILE = '/root/aim/train_data/games.jsonl'
 WEIGHTS_FILE = '/root/aim/server/public/downloads/train_weights.json'
 OUT_SLOTS = 97   # 8格×12槽（move1, move2, atk敌1..3, atk己1..3, dev敌, dev己, split, produce）+ endTurn
 IN_DIM = 53      # 8格×6特征 + 5全局
-HIDDEN = 64
+HIDDEN = 128
 MAX_CELLS = 8
 
 # ── 数据加载 ──
@@ -284,6 +284,8 @@ def main():
     ap.add_argument('--epochs', type=int, default=80)
     ap.add_argument('--lr', type=float, default=0.001)
     ap.add_argument('--fresh', action='store_true', help='从零训练（不 warm start）——洗掉旧标注学到的错误行为')
+    ap.add_argument('--extra-data', default='',
+                    help='附加训练数据文件（jsonl，如规则 AI 合成对局），与人类数据合并训练')
     ap.add_argument('--deploy', action='store_true', help='训练完写权重到下载目录（客户端拉取生效）')
     args = ap.parse_args()
 
@@ -292,6 +294,10 @@ def main():
     if not games:
         print('没有训练数据，先去训练场打几局（http://192.140.166.178:5000/train/）')
         return
+    if args.extra_data:
+        extra = load_games(args.extra_data)
+        print(f'附加数据: {args.extra_data} → {len(extra)} 局')
+        games = games + extra
     X, Y, stats = build_samples(games)
     if X is None:
         print(f'无有效样本（{stats}）')
@@ -306,15 +312,16 @@ def main():
         try:
             w = json.load(open(WEIGHTS_FILE, encoding='utf-8'))
             if w.get('out') == OUT_SLOTS:
+                old_hidden = int(w.get('hidden', HIDDEN))
                 init = {
-                    'w1': np.array(w['w1'], dtype=np.float64).reshape(IN_DIM, HIDDEN),
+                    'w1': np.array(w['w1'], dtype=np.float64).reshape(IN_DIM, old_hidden),
                     'b1': np.array(w['b1'], dtype=np.float64),
-                    'w2': np.array(w['w2'], dtype=np.float64).reshape(HIDDEN, HIDDEN),
+                    'w2': np.array(w['w2'], dtype=np.float64).reshape(old_hidden, old_hidden),
                     'b2': np.array(w['b2'], dtype=np.float64),
-                    'wo': np.array(w['wo'], dtype=np.float64).reshape(HIDDEN, OUT_SLOTS),
+                    'wo': np.array(w['wo'], dtype=np.float64).reshape(old_hidden, OUT_SLOTS),
                     'bo': np.array(w['bo'], dtype=np.float64),
                 }
-                print('warm start：基于现有权重继续训练')
+                print(f'warm start：基于现有权重继续训练（hidden={old_hidden}）')
         except Exception:
             pass
     params = train_mlp(X, Y, epochs=args.epochs, lr=args.lr, init=init)

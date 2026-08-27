@@ -41,10 +41,19 @@ function readRlHistory() {
   return h;
 }
 
+function readEvalInfo() {
+  let e = null;
+  try {
+    const ef = path.join(__dirname, '..', '..', 'train_data', 'eval_result.json');
+    if (fs.existsSync(ef)) e = JSON.parse(fs.readFileSync(ef, 'utf8'));
+  } catch (_) {}
+  return e;
+}
+
 function trainStats() {
   if (trainStatsCache) {
-    // 静态部分走缓存，RL 状态/历史实时读
-    return { ...trainStatsCache, rl: readRl(), rlHistory: readRlHistory() };
+    // 静态部分走缓存，RL 状态/历史 + 模型评估实时读（eval 曾被缓存成旧值误导监视台）
+    return { ...trainStatsCache, rl: readRl(), rlHistory: readRlHistory(), eval: readEvalInfo() };
   }
   let games = 0, steps = 0;
   let aiGames = 0, aiWins = 0;
@@ -83,12 +92,8 @@ function trainStats() {
       modelUpdatedAt = w.updatedAt || null;
     }
   } catch (_) {}
-  // 模型实力评估结果（监视台展示：vs easy/normal/hard 胜率等）
-  let evalInfo = null;
-  try {
-    const ef = path.join(__dirname, '..', '..', 'train_data', 'eval_result.json');
-    if (fs.existsSync(ef)) evalInfo = JSON.parse(fs.readFileSync(ef, 'utf8'));
-  } catch (_) {}
+  // 模型实力评估结果（监视台展示：vs easy/normal/hard 胜率等）——实时读
+  const evalInfo = readEvalInfo();
   trainStatsCache = {
     games, steps, modelVersion, modelUpdatedAt, training, evaluating, lastTrainAt, eval: evalInfo,
     rl: readRl(), rlHistory: readRlHistory(),

@@ -43,6 +43,7 @@ class _TrainScreenState extends State<TrainScreen> {
   bool _training = false;
   Timer? _statsTimer;
   int _humanSide = 0; // 人类所在侧（0=左，1=右），每局翻转
+  bool _duoMode = false; // 双人对战：两个真人轮流操作，双方棋谱都记录（AI 都学）
 
   @override
   void initState() {
@@ -68,17 +69,20 @@ class _TrainScreenState extends State<TrainScreen> {
       gameState = null;
       _uploadMsg = '';
     });
-    socket = LocalAimSocket(limit: 16, aiLevel: AiLevel.hard, humanSide: _humanSide);
-    socket.recordMode = true;
-    socket.aiDecider = trainAi.hasModel ? trainAi.decide : null;
+    // 双人对战：aiLevel=null（无 AI）、记录双方；单人对战：人类 vs AI 记录人类
+    socket = LocalAimSocket(limit: 16,
+        aiLevel: _duoMode ? null : AiLevel.hard, humanSide: _humanSide)
+      ..recordMode = true
+      ..duoMode = _duoMode
+      ..aiDecider = (!_duoMode && trainAi.hasModel) ? trainAi.decide : null;
     socket.onEvent = (event, data) {
       if (!mounted) return;
       if (event == 'game_state') {
         setState(() => gameState = data);
       } else if (event == 'game_over') {
         setState(() => gameOver = data);
-        // 本局结束，下一局换边（左右交替，AI 双向学习）
-        _humanSide = 1 - _humanSide;
+        // 本局结束，下一局换边（左右交替，AI 双向学习；双人模式视角跟随回合，无需换边）
+        if (!_duoMode) _humanSide = 1 - _humanSide;
       }
     };
     socket.onServerError = (msg) {
@@ -86,6 +90,12 @@ class _TrainScreenState extends State<TrainScreen> {
     };
     socket.onGameRecorded = _uploadGame;
     socket.connect();
+  }
+
+  // 切换 单人/双人 模式：关掉当前局重新开局
+  void _toggleDuoMode() {
+    setState(() => _duoMode = !_duoMode);
+    _newGame();
   }
 
   // 对局结束：上传数据 + 刷新统计
@@ -194,16 +204,18 @@ class _TrainScreenState extends State<TrainScreen> {
     );
   }
 
-  // ── 顶部统计条：训练局数 / 步数 / 模型版本 / 训练状态 ──
+  // ── 顶部统计条：训练局数 / 步数 / 模型版本 / 训练状态 / 模式切换 ──
   Widget _statsBar() {
-    final aiName = trainAi.hasModel ? 'AI·模型 v${trainAi.version}' : 'AI·启发式';
+    final aiName = _duoMode
+        ? '双人对战'
+        : (trainAi.hasModel ? 'AI·模型 v${trainAi.version}' : 'AI·启发式');
     return Container(
       color: const Color(0xFF1A1916),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Row(children: [
         _pt('🧪 训练场', 14, _signal, bold: true),
         const SizedBox(width: 10),
-        _pt('本局你：${_humanSide == 0 ? '左方' : '右方'}', 12, _paper),
+        _pt(_duoMode ? '玩家1左 · 玩家2右，轮流操作' : '本局你：${_humanSide == 0 ? '左方' : '右方'}', 12, _paper),
         const SizedBox(width: 14),
         _pt('局数 $_games', 12, _paper),
         const SizedBox(width: 12),
@@ -217,6 +229,19 @@ class _TrainScreenState extends State<TrainScreen> {
         const Spacer(),
         if (_uploadMsg.isNotEmpty) _pt(_uploadMsg, 11, _green),
         const SizedBox(width: 8),
+        GestureDetector(
+          onTap: _toggleDuoMode,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: _duoMode ? const Color(0xFF3A3324) : const Color(0xFF2A2824),
+              border: Border.all(color: _duoMode ? const Color(0xFFFFD36A) : const Color(0xFF5A554C)),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: _pt(_duoMode ? '双人 ✓' : '双人', 12, _duoMode ? _warn : _paper),
+          ),
+        ),
+        const SizedBox(width: 6),
         GestureDetector(
           onTap: _newGame,
           child: Container(
