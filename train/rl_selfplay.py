@@ -66,6 +66,8 @@ PLATEAU_DELTA = 2.5   # 窗口内分数波动 < 此值 → 平台期（16 局评
 TEMP_BASE = 1.0       # 采样温度基础值
 TEMP_STEP = 0.3       # 每持续一个平台档，温度 +0.3
 TEMP_MAX = 2.5        # 温度封顶
+ENTROPY_BETA = 0.02   # 熵正则系数：强制策略保持随机性，argmax 不早熟固化——
+                      # 否则 PPO 只强化当前最优动作，argmax 永不翻转（实测 15000 局只变 1%）
 # ── 速战速决奖励（牢大定）：对齐评估「速战速决」指标 ──
 # 20 回合内赢 → 全额 R_WIN；之后每拖 10 回合扣 1（下限 0.5）；输仍 R_LOSE
 WIN_TURNS_OK = 20
@@ -420,13 +422,19 @@ def update(policy, batch, lr=LR, epochs=PPO_EPOCHS, clip=PPO_CLIP):
         surr2 = np.clip(ratio, 1.0 - clip, 1.0 + clip) * adv
         loss_p = -(np.minimum(surr1, surr2)).mean()
         loss_v = ((R - values[:, 0]) ** 2).mean()
-        total_loss += loss_p + loss_v
-        # 反向（策略梯度 + 价值梯度）
+        # 熵正则（打破 argmax 惯性：∂(-βH)/∂z = β·p·(log p + H_row)）
+        logp = np.log(probs + 1e-12)
+        H_row = -(probs * logp).sum(axis=1, keepdims=True)
+        entropy = H_row[:, 0]
+        loss_e = -ENTROPY_BETA * entropy.mean()
+        total_loss += loss_p + loss_v + loss_e
+        # 反向（策略梯度 + 价值梯度 + 熵梯度）
         dlogits = probs.copy()
         dlogits[row, slots] -= 1
         # clip 掩码：被截断（surr2 < surr1）的样本梯度归零
         mask = (surr1 <= surr2).astype(np.float64)
         dlogits *= (ratio * adv * mask / len(batch))[:, None]  # PPO 目标对 logits 的梯度
+        dlogits += (ENTROPY_BETA * probs * (logp + H_row)) / len(batch)  # 熵正则梯度
         dv = 2 * (values - R[:, None]) / len(batch)
     # h2 梯度
     dh2 = dlogits @ policy.wo + dv @ policy.wv
@@ -526,6 +534,7 @@ def main():
     if os.path.exists(STOP_FILE):
         os.remove(STOP_FILE)
     policy = RlPolicy(BC_WEIGHTS, seed=42)
+    base_ref = RlPolicy(BC_WEIGHTS, seed=0)  # 行为诊断参照（argmax 差异率对比）
     opponent = policy.clone()  # 延迟快照对手
     rl_version = 1
     try:
@@ -619,6 +628,25 @@ def main():
         if total_games % EVAL_EVERY == 0:
             score, grade = eval_model_score(policy)
             avg = float(np.mean(rewards[-EVAL_EVERY:])) if rewards else 0
+            # ── 行为变化诊断（每 200 局）：argmax 决策 vs base 的差异率 ──
+            # 分数由 argmax 评估决定；权重在动 ≠ 行为在变，这个指标直接显示决策层变化
+            if total_games % 200 == 0:
+                from rules import AimGame
+                same = diff = 0
+                for _ in range(12):
+                    g = AimGame(limit=16); guard = 0
+                    while g.winner is None and guard < 300:
+                        guard += 1
+                        a1, _ = base_ref.act(g, sample=False)
+                        a2, _ = policy.act(g, sample=False)
+                        if a1 == a2: same += 1
+                        else: diff += 1
+                        r = g.apply_action(g.turn, a1, defer_roll=True)
+                        if not r['ok']: break
+                        while g.has_pending_roll:
+                            if g.roll_step_once(g.turn) is None: g.clear_pending_roll(); break
+                div = diff / (same + diff) * 100 if (same + diff) else 0
+                print(f'  行为诊断: argmax 决策差异率 {div:.1f}%（vs base）', flush=True)
             print(f'[{total_games}局] 均奖 {avg:.2f} 综合分 {score}（{grade}） 温度{policy.temp:.2f} 吞敌{devour_total[0]} 吞己{devour_total[1]} 自博弈胜率{sp_wins/total_games*100:.0f}% 耗时{(time.time()-t0)/60:.1f}m', flush=True)
             append_history(total_games, score, grade, avg)  # 波形图历史（综合得分）
             # ── 自适应探索：分数平台期 → 提高采样温度激发新行为（牢大定）──
