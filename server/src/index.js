@@ -62,8 +62,16 @@ function trainStats() {
     const ef = path.join(__dirname, '..', '..', 'train_data', 'eval_result.json');
     if (fs.existsSync(ef)) evalInfo = JSON.parse(fs.readFileSync(ef, 'utf8'));
   } catch (_) {}
+  // 自博弈强化学习状态（rl_selfplay.py 心跳）
+  let rl = null;
+  try {
+    const rf = path.join(__dirname, '..', '..', 'train_data', 'rl_status.json');
+    if (fs.existsSync(rf)) rl = JSON.parse(fs.readFileSync(rf, 'utf8'));
+    if (rl && rlProcess && rlProcess.exitCode === null && rl.state !== 'running') rl.state = 'running';
+  } catch (_) {}
   trainStatsCache = {
     games, steps, modelVersion, modelUpdatedAt, training, evaluating, lastTrainAt, eval: evalInfo,
+    rl,
     // 与真人对局：AI 场次/胜场/胜率 + 每局序列（折线图）
     aiGames, aiWins,
     aiWinRate: aiGames ? Math.round((aiWins / aiGames) * 1000) / 1000 : 0,
@@ -78,6 +86,7 @@ const TRAIN_MIN_GAP = 30 * 1000; // 30s 最小间隔（防连续对局训练风�
 let training = false;
 let pendingTrain = false;
 let evaluating = false;
+let rlProcess = null; // 自博弈 RL 进程（detached）
 let lastTrainAt = null;
 
 function triggerTrain() {
@@ -683,6 +692,34 @@ const dlServer = http.createServer((req, res) => {
   if (pathname === '/api/train/stats') {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(trainStats()));
+    return;
+  }
+  // ── 自博弈强化学习：启动（后台进程，以最新 BC 权重为基）──
+  if (pathname === '/api/train/rl/start') {
+    if (rlProcess && rlProcess.exitCode === null) {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: true, msg: '已在运行' }));
+      return;
+    }
+    const stopFile = path.join(__dirname, '..', '..', 'train', 'rl_stop');
+    try { if (fs.existsSync(stopFile)) fs.unlinkSync(stopFile); } catch (_) {}
+    const logPath = path.join(__dirname, '..', '..', 'train', 'rl.log');
+    const out = fs.openSync(logPath, 'a');
+    fs.writeSync(out, `\n===== RL 启动 ${new Date().toISOString()} =====\n`);
+    rlProcess = spawn('python3', ['/root/aim/train/rl_selfplay.py'],
+      { cwd: '/root/aim', stdio: ['ignore', out, out], detached: true });
+    rlProcess.unref(); // 服务器重启不杀 RL
+    rlProcess.on('close', () => { rlProcess = null; });
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: true, msg: 'RL 已启动' }));
+    return;
+  }
+  // ── 自博弈强化学习：停止（优雅退出）──
+  if (pathname === '/api/train/rl/stop') {
+    const stopFile = path.join(__dirname, '..', '..', 'train', 'rl_stop');
+    try { fs.writeFileSync(stopFile, 'stop'); } catch (_) {}
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: true, msg: 'RL 停止中（保存后退出）' }));
     return;
   }
   // ── AI 训练场：训练日志尾部（监视台用）──

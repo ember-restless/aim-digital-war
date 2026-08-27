@@ -1,6 +1,6 @@
 {
- "ts": "2026-08-27 14:10:00",
- "modelVersion": 20,
+ "ts": "2026-08-27 14:28:17",
+ "modelVersion": 30,
  "totalGames": 32,
  "results": [
   {
@@ -33,44 +33,44 @@
    "games": 4,
    "wins": 1,
    "winRate": 0.25,
-   "avgTurns": 44.8
+   "avgTurns": 52.8
   },
   {
    "opponent": "hard",
    "side": 0,
    "games": 8,
-   "wins": 1,
-   "winRate": 0.12,
-   "avgTurns": 29.2
+   "wins": 2,
+   "winRate": 0.25,
+   "avgTurns": 29.8
   },
   {
    "opponent": "hard",
    "side": 1,
    "games": 8,
-   "wins": 1,
-   "winRate": 0.12,
-   "avgTurns": 34.9
+   "wins": 2,
+   "winRate": 0.25,
+   "avgTurns": 37.8
   }
  ],
  "summary": {
-  "overall": 0.31,
-  "asLeft": 0.31,
-  "asRight": 0.31,
+  "overall": 0.38,
+  "asLeft": 0.38,
+  "asRight": 0.38,
   "vsEasy": 0.75,
   "vsNormal": 0.25,
-  "vsHard": 0.12
+  "vsHard": 0.25
  },
  "gameStats": {
-  "avgKills": 1.3,
-  "avgLosses": 1.7,
+  "avgKills": 1.6,
+  "avgLosses": 1.5,
   "avgProduce": 1.2,
-  "avgTurns": 35.5,
+  "avgTurns": 37.4,
   "maxDigit": 8
  },
  "bench": {
-  "score": 11,
+  "score": 12,
   "total": 20,
-  "passRate": 0.55,
+  "passRate": 0.6,
   "byCat": {
    "进攻": {
     "score": 4,
@@ -88,9 +88,9 @@
     "rate": 0.4
    },
    "战术": {
-    "score": 4,
+    "score": 5,
     "total": 5,
-    "rate": 0.8
+    "rate": 1.0
    }
   },
   "details": [
@@ -223,8 +223,8 @@
    {
     "name": "桥头堡：隔桥远程输出",
     "cat": "战术",
-    "ok": false,
-    "chosen": "move",
+    "ok": true,
+    "chosen": "attack",
     "expect": "attack"
    },
    {
@@ -237,7 +237,7 @@
   ]
  },
  "score": {
-  "total": 41.5,
+  "total": 44.3,
   "max": 100,
   "grade": "D",
   "items": [
@@ -262,7 +262,7 @@
     "name": "对战·hard",
     "score": 0,
     "max": 20,
-    "basis": "胜率 12%",
+    "basis": "胜率 25%",
     "std": "100% 胜率满分 20 分；每降 10% 扣 4 分"
    },
    {
@@ -292,9 +292,9 @@
    {
     "key": "tac",
     "name": "能力·战术",
-    "score": 8.0,
+    "score": 10.0,
     "max": 10,
-    "basis": "4/5 题通过",
+    "basis": "5/5 题通过",
     "std": "通过率 × 10 分"
    },
    {
@@ -308,9 +308,9 @@
    {
     "key": "kd",
     "name": "运营·攻守效率",
-    "score": 2.9,
+    "score": 3.7,
     "max": 5,
-    "basis": "击杀/损失 = 1.3/1.7 = 0.76",
+    "basis": "击杀/损失 = 1.6/1.5 = 1.07",
     "std": "K/D≥1.6 满分；≥1 得 3.5；≥0.5 得 2"
    },
    {
@@ -326,7 +326,7 @@
     "name": "运营·持久能力",
     "score": 5,
     "max": 5,
-    "basis": "平均回合 35.5",
+    "basis": "平均回合 37.4",
     "std": "≥35 回合满分 5；每少 7 扣 1"
    }
   ]
