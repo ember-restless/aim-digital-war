@@ -115,10 +115,11 @@ class _TrainScreenState extends State<TrainScreen> {
         builder: (_) => LobbyScreen(server: server, playerName: SettingsStore.playerName, packId: 'default')));
   }
 
-  // 对局结束：上传数据 + 刷新统计
+  // 对局结束：上传数据 + 刷新统计（单人=打 AI 计入 AI 胜率；双人真人对局 vsAi=false）
   Future<void> _uploadGame(Map<String, dynamic> data) async {
     if (_uploading) return;
     _uploading = true;
+    data['vsAi'] = !_duoMode;
     try {
       final resp = await http
           .post(Uri.parse('${AppConfig.serverUrl}/api/train/upload'),

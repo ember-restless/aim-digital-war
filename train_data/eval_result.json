@@ -1,16 +1,16 @@
 {
- "ts": "2026-08-27 22:00:22",
- "modelVersion": 105,
+ "ts": "2026-08-27 22:20:16",
+ "modelVersion": 106,
  "totalGames": 32,
  "results": [
   {
    "opponent": "easy",
    "side": 0,
    "games": 4,
-   "wins": 2,
-   "winRate": 0.5,
-   "avgTurns": 24.5,
-   "avgWinTurns": 24.0
+   "wins": 1,
+   "winRate": 0.25,
+   "avgTurns": 23.0,
+   "avgWinTurns": 22.0
   },
   {
    "opponent": "easy",
@@ -25,10 +25,10 @@
    "opponent": "normal",
    "side": 0,
    "games": 4,
-   "wins": 1,
-   "winRate": 0.25,
-   "avgTurns": 20.2,
-   "avgWinTurns": 16.0
+   "wins": 2,
+   "winRate": 0.5,
+   "avgTurns": 19.0,
+   "avgWinTurns": 17.0
   },
   {
    "opponent": "normal",
@@ -36,48 +36,48 @@
    "games": 4,
    "wins": 3,
    "winRate": 0.75,
-   "avgTurns": 50.8,
-   "avgWinTurns": 49.3
+   "avgTurns": 59.5,
+   "avgWinTurns": 43.3
   },
   {
    "opponent": "hard",
    "side": 0,
    "games": 8,
-   "wins": 0,
-   "winRate": 0.0,
-   "avgTurns": 27.5,
-   "avgWinTurns": 0
+   "wins": 1,
+   "winRate": 0.12,
+   "avgTurns": 24.4,
+   "avgWinTurns": 18.0
   },
   {
    "opponent": "hard",
    "side": 1,
    "games": 8,
-   "wins": 3,
-   "winRate": 0.38,
-   "avgTurns": 40.8,
-   "avgWinTurns": 52.3
+   "wins": 2,
+   "winRate": 0.25,
+   "avgTurns": 38.1,
+   "avgWinTurns": 45.0
   }
  ],
  "summary": {
   "overall": 0.41,
-  "asLeft": 0.19,
-  "asRight": 0.62,
-  "vsEasy": 0.75,
-  "vsNormal": 0.5,
+  "asLeft": 0.25,
+  "asRight": 0.56,
+  "vsEasy": 0.62,
+  "vsNormal": 0.62,
   "vsHard": 0.19
  },
  "gameStats": {
-  "avgKills": 1.5,
-  "avgLosses": 1.3,
-  "avgProduce": 2.3,
-  "avgTurns": 34.7,
-  "avgWinTurns": 42.3,
+  "avgKills": 1.3,
+  "avgLosses": 1.2,
+  "avgProduce": 2.2,
+  "avgTurns": 34.0,
+  "avgWinTurns": 36.5,
   "maxDigit": 8
  },
  "bench": {
-  "score": 13,
+  "score": 12,
   "total": 24,
-  "passRate": 0.54,
+  "passRate": 0.5,
   "byCat": {
    "进攻": {
     "score": 4,
@@ -85,9 +85,9 @@
     "rate": 0.8
    },
    "防守": {
-    "score": 3,
+    "score": 2,
     "total": 5,
-    "rate": 0.6
+    "rate": 0.4
    },
    "经济": {
     "score": 2,
@@ -151,8 +151,8 @@
    {
     "name": "走位：躲开敌方滚木死亡区",
     "cat": "防守",
-    "ok": true,
-    "chosen": "move",
+    "ok": false,
+    "chosen": "split",
     "expect": "move"
    },
    {
@@ -277,24 +277,24 @@
   ]
  },
  "score": {
-  "total": 40.8,
+  "total": 40.9,
   "max": 100,
   "grade": "D",
   "items": [
    {
     "key": "vsEasy",
     "name": "对战·easy",
-    "score": 4.2,
+    "score": 2.4,
     "max": 8,
-    "basis": "胜率 75%",
+    "basis": "胜率 62%",
     "std": "100% 胜率满分 8 分；每降 10% 扣 1.5 分"
    },
    {
     "key": "vsNormal",
     "name": "对战·normal",
-    "score": 2.0,
+    "score": 4.5,
     "max": 12,
-    "basis": "胜率 50%",
+    "basis": "胜率 62%",
     "std": "100% 胜率满分 12 分；每降 10% 扣 2 分"
    },
    {
@@ -316,9 +316,9 @@
    {
     "key": "def",
     "name": "能力·防守",
-    "score": 4.8,
+    "score": 3.2,
     "max": 8,
-    "basis": "3/5 题通过",
+    "basis": "2/5 题通过",
     "std": "通过率 × 8 分"
    },
    {
@@ -350,15 +350,15 @@
     "name": "运营·造兵效率",
     "score": 5,
     "max": 5,
-    "basis": "平均造兵 2.3",
+    "basis": "平均造兵 2.2",
     "std": "≥2 满分 5；每少 0.5 扣 1"
    },
    {
     "key": "kd",
     "name": "运营·攻守效率",
-    "score": 3.9,
+    "score": 3.7,
     "max": 5,
-    "basis": "击杀/损失 = 1.5/1.3 = 1.15",
+    "basis": "击杀/损失 = 1.3/1.2 = 1.08",
     "std": "K/D≥1.6 满分；≥1 得 3.5；≥0.5 得 2"
    },
    {
@@ -372,9 +372,9 @@
    {
     "key": "spd",
     "name": "运营·速战速决",
-    "score": 0.5,
+    "score": 1.7,
     "max": 5,
-    "basis": "获胜局平均回合 42.3",
+    "basis": "获胜局平均回合 36.5",
     "std": "≤20 回合满分 5；每多 5 回合扣 1 分"
    }
   ]

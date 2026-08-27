@@ -71,7 +71,8 @@ function trainStats() {
           // 从第一步的人类 owner 推断人类所在侧，算 AI 胜负
           const st = g.steps || [];
           const humanSide = st.length ? (st[0].owner ?? -1) : -1;
-          if (humanSide === 0 || humanSide === 1) {
+          // 只统计「人类 vs AI」对局（训练场单人/本地记录）：联机/双人真人对局 vsAi=false，不算 AI 胜率
+          if ((g.vsAi !== false) && (humanSide === 0 || humanSide === 1)) {
             seq++;
             const aiWin = (humanSide === 0 && g.winner === 1) || (humanSide === 1 && g.winner === 0);
             aiGames++;
@@ -283,7 +284,9 @@ io.on('connection', (socket) => {
         fs.mkdirSync(dir, { recursive: true });
         fs.appendFileSync(path.join(dir, 'games.jsonl'),
           JSON.stringify({ v: VERSION, winner: data.winner, turns: data.turns,
-                           limit: data.limit, steps: data.steps, ts: Date.now() }) + '\n');
+                           limit: data.limit, steps: data.steps,
+                           vsAi: false, // 联机真人对局：不计入 AI 胜率统计
+                           ts: Date.now() }) + '\n');
         trainStatsCache = null;
         triggerTrain();
       } catch (e) {
@@ -712,6 +715,7 @@ const dlServer = http.createServer((req, res) => {
           turns: b.turns,
           limit: b.limit,
           steps: b.steps,
+          vsAi: b.vsAi !== false, // 训练场单人=打 AI（计入 AI 胜率）；双人真人对局=false
           ts: Date.now(),
         });
         fs.appendFileSync(path.join(dir, 'games.jsonl'), line + '\n');
