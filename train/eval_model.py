@@ -85,8 +85,10 @@ def compute_score(summary, bench, gs, results):
         f'击杀/损失 = {gs["avgKills"]}/{gs["avgLosses"]} = {kd:.2f}', 'K/D≥1.6 满分；≥1 得 3.5；≥0.5 得 2')
     add('dev', '运营·发展上限', min(5, 1 + max(0, gs['maxDigit'] - 5)), 5,
         f'单局最高数字 {gs["maxDigit"]}', '达到 9 满分 5；8 得 4；7 得 3；6 得 2')
-    add('dur', '运营·持久能力', min(5, 1 + gs['avgTurns'] / 8), 5,
-        f'平均回合 {gs["avgTurns"]}', '≥35 回合满分 5；每少 7 扣 1')
+    # 速战速决（牢大定）：获胜局平均回合越少分越高（拖长局不再奖励——与速胜方向冲突的「持久能力」移除）
+    wt = gs.get('avgWinTurns', 0)
+    add('spd', '运营·速战速决', max(0, 5 - max(0, wt - 20) / 5), 5,
+        f'获胜局平均回合 {wt}', '≤20 回合满分 5；每多 5 回合扣 1 分')
 
     total = round(sum(i['score'] for i in items), 1)
     grade = 'S' if total >= 90 else 'A' if total >= 75 else 'B' if total >= 60 else 'C' if total >= 45 else 'D'
@@ -108,11 +110,13 @@ def run_eval(weights_path, games_spec='easy=3,normal=3,hard=5', out_path=None):
         plan.append((name, int(n)))
 
     results = []
-    agg = {'kills': 0, 'losses': 0, 'produce': 0, 'maxDigit': 0, 'turns': 0, 'n': 0}
+    agg = {'kills': 0, 'losses': 0, 'produce': 0, 'maxDigit': 0, 'turns': 0, 'n': 0,
+           'winTurns': 0, 'winN': 0}
     for opp, n in plan:
         for side in (0, 1):
             wins = 0
             turns = []
+            win_turns = []
             for i in range(n):
                 m = ModelAi(weights_path, seed=i * 7 + side * 101)
                 o = AimAi(opp, seed=i * 13 + side * 37)
@@ -122,6 +126,7 @@ def run_eval(weights_path, games_spec='easy=3,normal=3,hard=5', out_path=None):
                     w, tc, st, md = play(o, m, seed=i)
                 if w == side:
                     wins += 1
+                    win_turns.append(tc)
                 turns.append(tc)
                 agg['kills'] += st['kills'][side]
                 agg['losses'] += st['losses'][side]
@@ -129,10 +134,14 @@ def run_eval(weights_path, games_spec='easy=3,normal=3,hard=5', out_path=None):
                 agg['maxDigit'] = max(agg['maxDigit'], md)
                 agg['turns'] += tc
                 agg['n'] += 1
+                if w == side:
+                    agg['winTurns'] += tc
+                    agg['winN'] += 1
             results.append({
                 'opponent': opp, 'side': side, 'games': n,
                 'wins': wins, 'winRate': round(wins / n, 2),
                 'avgTurns': round(sum(turns) / len(turns), 1) if turns else 0,
+                'avgWinTurns': round(sum(win_turns) / len(win_turns), 1) if win_turns else 0,
             })
 
     def wr(r): return r['winRate'] if r['games'] else 0
@@ -158,6 +167,7 @@ def run_eval(weights_path, games_spec='easy=3,normal=3,hard=5', out_path=None):
             'avgLosses': round(agg['losses'] / agg['n'], 1) if agg['n'] else 0,
             'avgProduce': round(agg['produce'] / agg['n'], 1) if agg['n'] else 0,
             'avgTurns': round(agg['turns'] / agg['n'], 1) if agg['n'] else 0,
+            'avgWinTurns': round(agg['winTurns'] / agg['winN'], 1) if agg['winN'] else 0,
             'maxDigit': agg['maxDigit'],
         },
         'bench': run_bench(weights_path),

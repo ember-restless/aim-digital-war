@@ -56,7 +56,12 @@ R_REPEAT_WARN = -0.6  # 第二次重复操作警告（第三次直接判负）
 R_WIN = 5.0           # 终局胜利（主导信号）
 R_LOSE = -5.0         # 终局失败
 DEVOUR_PRIOR = 1.5    # 吞敌槽探索先验（logit 偏置，仅训练期引导，参与更新可被拉回）
-EPS = 0.05            # ε 均匀探索：稀有合法动作（吞敌）也有公平机会被尝试
+EPS = 0.05            # ε 均匀探索基础值：稀有合法动作（吞敌）也有公平机会被尝试
+# ── 自适应探索（牢大定）：分数长时间无突破 → 提高噪点激发新行为 ──
+PLATEAU_WINDOW = 5    # 用最近 N 次评估判定平台期
+PLATEAU_DELTA = 2.5   # 窗口内分数波动 < 此值 → 平台期（16 局评估噪声约 ±2，留余量）
+EPS_STEP = 0.05       # 每持续一个平台档，探索率 +0.05
+EPS_MAX = 0.30        # 探索率封顶（太高会破坏已学行为）
 
 
 def xavier(fan_in, fan_out, rng):
@@ -70,6 +75,7 @@ class RlPolicy:
 
     def __init__(self, weights_path=None, seed=0):
         self.rng = np.random.default_rng(seed)
+        self.eps = EPS   # 自适应探索率（平台期会动态调高）
         if weights_path and os.path.exists(weights_path):
             w = json.load(open(weights_path, encoding='utf-8'))
             self.w1 = np.array(w['w1'], dtype=np.float64).reshape(HIDDEN, IN_DIM)
@@ -104,6 +110,7 @@ class RlPolicy:
     def clone(self):
         p = RlPolicy.__new__(RlPolicy)
         p.rng = np.random.default_rng(0)
+        p.eps = self.eps
         for k in ('w1', 'b1', 'w2', 'b2', 'wo', 'bo', 'wv', 'bv'):
             setattr(p, k, getattr(self, k).copy())
         return p
@@ -202,7 +209,7 @@ class RlPolicy:
             e = np.exp((logits - logits.max()) / temp)
             p = e / e.sum()
             n = len(cands)
-            if self.rng.random() < EPS:
+            if self.rng.random() < self.eps:
                 # ε 均匀探索：给稀有合法动作（如吞敌）公平的探索机会
                 # 探索步是 off-policy 的，不记录（lp=None → play_game 跳过）
                 idx = int(self.rng.integers(n))
@@ -497,6 +504,8 @@ def main():
     batch = []
     devour_total = [0, 0]   # [吞敌, 吞己] 累计（验证吞噬修正效果）
     sp_wins = 0             # 策略 vs 延迟快照胜局数（学习信号）
+    score_window = []       # 最近 N 次评估分数（平台期检测）
+    plateau_count = 0       # 平台期持续档位（探索率据此提升）
     t0 = time.time()
     base_wr = base_win_rate()  # 原模型（BC 基础）vs hard 胜率（保留参考）
     base_score = None
@@ -511,8 +520,10 @@ def main():
         if os.path.exists(STOP_FILE):
             print('检测到停止信号，保存退出', flush=True)
             policy.save(RL_WEIGHTS, version=rl_version, base_version=base_version,
-                        extra={'games': total_games, 'avgReward': round(float(np.mean(rewards[-50:])) if rewards else 0, 3)})
+                        extra={'games': total_games, 'avgReward': round(float(np.mean(rewards[-50:])) if rewards else 0, 3),
+                               'eps': policy.eps})
             write_status({'state': 'stopped', 'games': total_games, 'baseWinRate': base_wr,
+                          'eps': policy.eps,
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
             return
         # 对手：1/3 局打规则 AI（轮换 easy/normal/hard，对齐评估目标），
@@ -536,12 +547,13 @@ def main():
             append_history(total_games, score, grade, avg)
             policy.save(RL_WEIGHTS, version=rl_version, base_version=base_version,
                         extra={'games': total_games, 'avgReward': round(avg, 3),
-                               'score': score, 'grade': grade, 'targetGames': target_games})
+                               'score': score, 'grade': grade, 'targetGames': target_games,
+                               'eps': policy.eps})
             write_status({'state': 'stopped', 'games': total_games, 'avgReward': round(avg, 3),
                           'score': score, 'grade': grade, 'baseWinRate': base_wr, 'baseScore': base_score,
-                          'targetGames': target_games,
+                          'targetGames': target_games, 'eps': policy.eps,
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
-            print(f'目标局数 {target_games} 达成，自动停止。综合分 {score}（{grade}）', flush=True)
+            print(f'目标局数 {target_games} 达成，自动停止。综合分 {score}（{grade}） ε{policy.eps:.2f}', flush=True)
             return
         # 每步即时奖励 → 折现 return-to-go（按局），入 batch
         if traj:
@@ -561,14 +573,30 @@ def main():
         if total_games % EVAL_EVERY == 0:
             score, grade = eval_model_score(policy)
             avg = float(np.mean(rewards[-EVAL_EVERY:])) if rewards else 0
-            print(f'[{total_games}局] 均奖 {avg:.2f} 综合分 {score}（{grade}） 吞敌{devour_total[0]} 吞己{devour_total[1]} 自博弈胜率{sp_wins/total_games*100:.0f}% 耗时{(time.time()-t0)/60:.1f}m', flush=True)
+            print(f'[{total_games}局] 均奖 {avg:.2f} 综合分 {score}（{grade}） ε{policy.eps:.2f} 吞敌{devour_total[0]} 吞己{devour_total[1]} 自博弈胜率{sp_wins/total_games*100:.0f}% 耗时{(time.time()-t0)/60:.1f}m', flush=True)
             append_history(total_games, score, grade, avg)  # 波形图历史（综合得分）
+            # ── 自适应探索：分数平台期 → 提高 ε 噪点激发新行为（牢大定）──
+            if score is not None:
+                score_window.append(score)
+                if len(score_window) > PLATEAU_WINDOW:
+                    score_window.pop(0)
+                if len(score_window) >= PLATEAU_WINDOW:
+                    spread = max(score_window) - min(score_window)
+                    if spread < PLATEAU_DELTA:
+                        plateau_count += 1   # 平台期：探索档位 +1
+                    else:
+                        plateau_count = 0    # 分数在动，恢复正常探索
+                new_eps = min(EPS + EPS_STEP * plateau_count, EPS_MAX)
+                if new_eps != policy.eps:
+                    print(f'  自适应探索：ε {policy.eps:.2f} → {new_eps:.2f}（平台档 {plateau_count}）', flush=True)
+                    policy.eps = new_eps
             policy.save(RL_WEIGHTS, version=rl_version, base_version=base_version,
                         extra={'games': total_games, 'avgReward': round(avg, 3),
-                               'score': score, 'grade': grade})
+                               'score': score, 'grade': grade, 'eps': policy.eps})
             write_status({'state': 'running', 'games': total_games, 'avgReward': round(avg, 3),
                           'score': score, 'grade': grade, 'rlVersion': rl_version,
                           'baseVersion': base_version, 'baseWinRate': base_wr, 'baseScore': base_score,
+                          'eps': policy.eps,
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
         elif total_games % SAVE_EVERY == 0:
             write_status({'state': 'running', 'games': total_games,

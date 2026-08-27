@@ -1,5 +1,5 @@
 {
- "ts": "2026-08-27 17:31:13",
+ "ts": "2026-08-27 18:05:42",
  "modelVersion": 102,
  "totalGames": 32,
  "results": [
@@ -9,7 +9,8 @@
    "games": 4,
    "wins": 3,
    "winRate": 0.75,
-   "avgTurns": 28.8
+   "avgTurns": 28.8,
+   "avgWinTurns": 26.0
   },
   {
    "opponent": "easy",
@@ -17,7 +18,8 @@
    "games": 4,
    "wins": 4,
    "winRate": 1.0,
-   "avgTurns": 45.2
+   "avgTurns": 45.2,
+   "avgWinTurns": 45.2
   },
   {
    "opponent": "normal",
@@ -25,7 +27,8 @@
    "games": 4,
    "wins": 2,
    "winRate": 0.5,
-   "avgTurns": 20.2
+   "avgTurns": 20.2,
+   "avgWinTurns": 19.5
   },
   {
    "opponent": "normal",
@@ -33,7 +36,8 @@
    "games": 4,
    "wins": 3,
    "winRate": 0.75,
-   "avgTurns": 45.8
+   "avgTurns": 45.8,
+   "avgWinTurns": 42.7
   },
   {
    "opponent": "hard",
@@ -41,7 +45,8 @@
    "games": 8,
    "wins": 0,
    "winRate": 0.0,
-   "avgTurns": 29.2
+   "avgTurns": 29.2,
+   "avgWinTurns": 0
   },
   {
    "opponent": "hard",
@@ -49,7 +54,8 @@
    "games": 8,
    "wins": 2,
    "winRate": 0.25,
-   "avgTurns": 39.1
+   "avgTurns": 39.1,
+   "avgWinTurns": 45.0
   }
  ],
  "summary": {
@@ -65,6 +71,7 @@
   "avgLosses": 1.2,
   "avgProduce": 2.3,
   "avgTurns": 34.6,
+  "avgWinTurns": 36.9,
   "maxDigit": 8
  },
  "bench": {
@@ -270,7 +277,7 @@
   ]
  },
  "score": {
-  "total": 48.5,
+  "total": 45.1,
   "max": 100,
   "grade": "C",
   "items": [
@@ -363,12 +370,12 @@
     "std": "达到 9 满分 5；8 得 4；7 得 3；6 得 2"
    },
    {
-    "key": "dur",
-    "name": "运营·持久能力",
-    "score": 5,
+    "key": "spd",
+    "name": "运营·速战速决",
+    "score": 1.6,
     "max": 5,
-    "basis": "平均回合 34.6",
-    "std": "≥35 回合满分 5；每少 7 扣 1"
+    "basis": "获胜局平均回合 36.9",
+    "std": "≤20 回合满分 5；每多 5 回合扣 1 分"
    }
   ]
  }
