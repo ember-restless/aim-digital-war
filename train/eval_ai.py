@@ -16,7 +16,7 @@ from ai import AimAi
 
 IN_DIM = 53
 HIDDEN = 64
-OUT = 49
+OUT = 97
 MAX_CELLS = 8
 
 
@@ -58,7 +58,7 @@ class ModelAi:
               game.points / 10.0, game.produce_left / 8.0]
         return np.array(x, dtype=np.float64)
 
-    def _slot(self, action, flip):
+    def _slot(self, action, flip, game=None):
         t = action.get('type')
         i = int(action.get('i', -1))
         if i < 0 or i >= MAX_CELLS:
@@ -67,17 +67,24 @@ class ModelAi:
             i = MAX_CELLS - 1 - i
         if t == 'move':
             steps = int(action.get('steps', 1))
-            return i * 6 + (1 if steps >= 2 else 0)
+            return i * 12 + (1 if steps >= 2 else 0)
         if t == 'attack':
-            return i * 6 + 2
+            k = abs(int(action.get('j', -1)) - int(action.get('i', -1)))
+            if k < 1 or k > 3:
+                return None
+            j = int(action.get('j', -1))
+            is_enemy = 0 <= j < len(game.cells) and game.cells[j].o is not None and game.cells[j].o != game.turn
+            return i * 12 + (2 + (k - 1) if is_enemy else 5 + (k - 1))
         if t == 'devour':
-            return i * 6 + 3
+            j = int(action.get('j', -1))
+            is_enemy = 0 <= j < len(game.cells) and game.cells[j].o is not None and game.cells[j].o != game.turn
+            return i * 12 + (8 if is_enemy else 9)
         if t == 'split':
-            return i * 6 + 4
+            return i * 12 + 10
         if t == 'produce':
-            return i * 6 + 5
+            return i * 12 + 11
         if t == 'endTurn':
-            return 48
+            return 96
         return None
 
     def decide(self, game):
@@ -94,7 +101,7 @@ class ModelAi:
         logits = self._forward(x)
         best, best_a = -1e18, None
         for a in playable:
-            slot = self._slot(a, flip)
+            slot = self._slot(a, flip, game)
             if slot is None or slot >= OUT:
                 continue
             s = logits[slot]

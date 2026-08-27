@@ -27,7 +27,7 @@ STATUS_FILE = os.path.join(BASE_DIR, 'train_data', 'rl_status.json')
 STOP_FILE = os.path.join(BASE_DIR, 'train', 'rl_stop')
 EVAL_FILE = os.path.join(BASE_DIR, 'train_data', 'eval_result.json')
 
-IN_DIM, HIDDEN, OUT = 53, 64, 49
+IN_DIM, HIDDEN, OUT = 53, 64, 97
 MAX_CELLS = 8
 GAMMA = 0.99
 LR = 1e-4
@@ -108,7 +108,7 @@ class RlPolicy:
               game.points / 10.0, game.produce_left / 8.0]
         return np.array(x, dtype=np.float64)
 
-    def slot_of(self, action, flip):
+    def slot_of(self, action, flip, game=None):
         t = action.get('type')
         i = int(action.get('i', -1))
         if i < 0 or i >= MAX_CELLS:
@@ -116,17 +116,24 @@ class RlPolicy:
         if flip:
             i = MAX_CELLS - 1 - i
         if t == 'move':
-            return i * 6 + (1 if int(action.get('steps', 1)) >= 2 else 0)
+            return i * 12 + (1 if int(action.get('steps', 1)) >= 2 else 0)
         if t == 'attack':
-            return i * 6 + 2
+            k = abs(int(action.get('j', -1)) - int(action.get('i', -1)))
+            if k < 1 or k > 3:
+                return None
+            j = int(action.get('j', -1))
+            is_enemy = 0 <= j < len(game.cells) and game.cells[j].o is not None and game.cells[j].o != game.turn
+            return i * 12 + (2 + (k - 1) if is_enemy else 5 + (k - 1))
         if t == 'devour':
-            return i * 6 + 3
+            j = int(action.get('j', -1))
+            is_enemy = 0 <= j < len(game.cells) and game.cells[j].o is not None and game.cells[j].o != game.turn
+            return i * 12 + (8 if is_enemy else 9)
         if t == 'split':
-            return i * 6 + 4
+            return i * 12 + 10
         if t == 'produce':
-            return i * 6 + 5
+            return i * 12 + 11
         if t == 'endTurn':
-            return 48
+            return 96
         return None
 
     def can_produce(self, game, owner):
@@ -156,7 +163,7 @@ class RlPolicy:
         slots = []
         cands = []
         for a in playable:
-            s = self.slot_of(a, flip)
+            s = self.slot_of(a, flip, game)
             if s is not None and s < OUT:
                 slots.append(s)
                 cands.append(a)

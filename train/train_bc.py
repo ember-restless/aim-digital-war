@@ -20,7 +20,7 @@ from rules import AimGame, AimCell
 
 DATA_FILE = '/root/aim/train_data/games.jsonl'
 WEIGHTS_FILE = '/root/aim/server/public/downloads/train_weights.json'
-OUT_SLOTS = 49   # 8格×6 + endTurn
+OUT_SLOTS = 97   # 8格×12槽（move1, move2, atk敌1..3, atk己1..3, dev敌, dev己, split, produce）+ endTurn
 IN_DIM = 53      # 8格×6特征 + 5全局
 HIDDEN = 64
 MAX_CELLS = 8
@@ -74,7 +74,11 @@ def normalize_view(g, owner):
     g.turn = 0
     return True
 
-def action_slot(action, flip=False):
+def action_slot(action, flip=False, game=None):
+    """动作 → 槽位（97）：每格 12 槽——
+    move1, move2, atk敌1..3, atk己1..3, dev敌, dev己, split, produce
+    攻击/吞噬槽位按「目标敌我 × 距离」细分，AI 能明确指定打谁（敌方优先习得）
+    """
     t = action.get('type')
     i = int(action.get('i', -1))
     if i < 0 or i >= MAX_CELLS:
@@ -83,17 +87,28 @@ def action_slot(action, flip=False):
         i = MAX_CELLS - 1 - i  # 镜像：格子索引翻转
     if t == 'move':
         steps = int(action.get('steps', 1))
-        return i * 6 + (1 if steps >= 2 else 0)
+        return i * 12 + (1 if steps >= 2 else 0)
     if t == 'attack':
-        return i * 6 + 2
+        k = abs(int(action.get('j', -1)) - int(action.get('i', -1)))  # 目标距离 1..3
+        if k < 1 or k > 3:
+            return None
+        j = int(action.get('j', -1))
+        # 目标是否敌方（o 非空且不是我方）
+        is_enemy = bool(game is not None and 0 <= j < len(game.cells)
+                        and game.cells[j].o is not None and game.cells[j].o != game.turn)
+        return i * 12 + (2 + (k - 1) if is_enemy else 5 + (k - 1))
     if t == 'devour':
-        return i * 6 + 3
+        j = int(action.get('j', -1))
+        is_enemy = False
+        if game is not None and 0 <= j < len(game.cells):
+            is_enemy = game.cells[j].o is not None and game.cells[j].o != game.turn
+        return i * 12 + (8 if is_enemy else 9)
     if t == 'split':
-        return i * 6 + 4
+        return i * 12 + 10
     if t == 'produce':
-        return i * 6 + 5
+        return i * 12 + 11
     if t == 'endTurn':
-        return 48
+        return 96
     return None
 
 def core_eq(a, b):
@@ -150,7 +165,7 @@ def build_samples(games):
             slot = None
             for a in playable:
                 if core_eq(a, action):
-                    slot = action_slot(a, flip)
+                    slot = action_slot(a, flip, g)
                     break
             if slot is None:
                 not_found += 1

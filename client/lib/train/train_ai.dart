@@ -98,7 +98,7 @@ class TrainAi {
     final temps = <double>[];
     final flip = game.turn == 1; // 我方在右 → 槽位镜像
     for (final a in playable) {
-      final slot = _actionSlot(a, flip);
+      final slot = _actionSlot(a, flip, game);
       if (slot == null || slot >= logits.length) continue;
       final s = logits[slot];
       if (s > best) {
@@ -190,8 +190,10 @@ class TrainAi {
     return x;
   }
 
-  // ── 动作 → 槽位（49，视角归一化：翻转时格子索引镜像）──
-  int? _actionSlot(Map<String, dynamic> a, bool flip) {
+  // ── 动作 → 槽位（97，视角归一化：翻转时格子索引镜像）──
+  // 每格 12 槽：move1, move2, atk敌1..3, atk己1..3, dev敌, dev己, split, produce
+  // 攻击/吞噬按「目标敌我 × 距离」细分，AI 能明确指定打谁（此前打谁随机落点→疯狂打己方）
+  int? _actionSlot(Map<String, dynamic> a, bool flip, AimGame game) {
     final t = a['type'] as String?;
     var i = a['i'] is num ? (a['i'] as num).toInt() : -1;
     if (i < 0 || i >= 8) return null;
@@ -199,17 +201,25 @@ class TrainAi {
     switch (t) {
       case 'move':
         final steps = a['steps'] is num ? (a['steps'] as num).toInt() : 1;
-        return i * 6 + (steps >= 2 ? 1 : 0);
+        return i * 12 + (steps >= 2 ? 1 : 0);
       case 'attack':
-        return i * 6 + 2;
+        final j = a['j'] is num ? (a['j'] as num).toInt() : -1;
+        final k = (j - (a['i'] as num).toInt()).abs(); // 目标距离 1..3（翻转不变）
+        if (k < 1 || k > 3) return null;
+        final isEnemy = j >= 0 && j < game.cells.length &&
+            game.cells[j].o != null && game.cells[j].o != game.turn;
+        return i * 12 + (isEnemy ? 2 + (k - 1) : 5 + (k - 1));
       case 'devour':
-        return i * 6 + 3;
+        final j = a['j'] is num ? (a['j'] as num).toInt() : -1;
+        final isEnemy = j >= 0 && j < game.cells.length &&
+            game.cells[j].o != null && game.cells[j].o != game.turn;
+        return i * 12 + (isEnemy ? 8 : 9);
       case 'split':
-        return i * 6 + 4;
+        return i * 12 + 10;
       case 'produce':
-        return i * 6 + 5;
+        return i * 12 + 11;
       case 'endTurn':
-        return 48;
+        return 96;
       default:
         return null;
     }

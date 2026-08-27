@@ -18,7 +18,7 @@ void main() {
     final ai = TrainAi();
     ai.loadFromJson(j);
     expect(ai.hasModel, true);
-    expect(ai.outSlots, 49);
+    expect(ai.outSlots, 97);
 
     // 开局局面：AI（玩家1）决策
     final g = AimGame(limit: 16);
