@@ -344,12 +344,28 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
         // 行动动画未播完（_animLock）时缓存到 _deferredRoll，播完再滚——不抢跑、也不被吞
         if (s != null && prevCells.isNotEmpty && s['cells'] is List) {
           // 逐步驱动（热座/局域网）：rollActs = 规则层算出的这一步基础动作，播完再请求下一步
+          // 2026-08-21 修复：行动点用完自动 endTurn 走全量滚动（rollPending=false、rollActs 只含最后一步），
+          // 此时若仍走 _playRollActs 会：① 抢跑正在播的行动动画（_animLock 未检查，牢大：先滚木后显示攻击结果）
+          // ② 只播最后一步、中间步跳变。
+          // → 仅"正在逐步驱动"时走 _playRollActs：有后续步骤（rollPending=true）或
+          // 本回合已逐步驱动且序号连续（_rollActsDriven && rseq==_lastRollStepSeq+1，覆盖最后一步）；
+          // 全量滚动完成（rollPending=false 且序号跳变）一律走 else 的全量 _detectRoll。
           final rseq = (s['rollStepSeq'] as num?)?.toInt() ?? 0;
           final rActs = s['rollActs'];
-          if (rseq != 0 && rseq != _lastRollStepSeq && rActs is List && rActs.isNotEmpty) {
+          if (rseq != 0 && rseq != _lastRollStepSeq && rActs is List && rActs.isNotEmpty &&
+              (s['rollPending'] == true || (_rollActsDriven && rseq == _lastRollStepSeq + 1))) {
             _lastRollStepSeq = rseq;
             _rollActsDriven = true; // 本回合滚木已由 rollActs 逐步驱动（播完即完成，全量 rollSteps 是冗余）
-            _playRollActs(rActs.cast<Map<String, dynamic>>(), prevCells, s['cells'] as List);
+            if (_animLock) {
+              // 行动动画未播完：缓存滚木动画，播完再播（不抢跑也不被吞）
+              _deferredRoll = {
+                'acts': rActs.cast<Map<String, dynamic>>(),
+                'prevCells': prevCells,
+                'newCells': s['cells'] as List,
+              };
+            } else {
+              _playRollActs(rActs.cast<Map<String, dynamic>>(), prevCells, s['cells'] as List);
+            }
           } else if (s['rollPending'] == true && rseq == _lastRollStepSeq && !_animLock) {
             // 滚木待滚且没有新步在播（endTurn 后第一步）→ 请求规则层算一步
             // 2026-08-19 修复：延迟到帧后请求——didUpdateWidget 是 build 阶段，同步 emit 会
@@ -593,6 +609,11 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
           if (!mounted) return;
           widget.socket.emit('roll_step');
         });
+      } else {
+        // 2026-08-21 修复：逐步驱动全部播完 → 清 _rollActsDriven，
+        // 否则残留到下回合（行动点用完自动 endTurn 走全量滚动时）会被 else 分支误判为
+        // "已逐步播完"而跳过全量重放 → 滚木动画整个丢失
+        _rollActsDriven = false;
       }
     });
   }
@@ -618,19 +639,42 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       _animCells = null;
       _animLock = false;
       _maybePlayDeferredRoll(baseCells: doneCells);
+      _maybeRequestPendingRoll();
       setState(() {});
     });
   }
 
   // 行动动画播完后补播缓存的滚木动画（不抢跑也不被吞）
   // [baseCells] 行动动画播完的棋盘：行动+滚木同一帧推送时，prevCells 是行动前（会显示回退），必须用行动后棋盘
+  // 缓存两种：{acts,...}=逐步驱动的某一步（_playRollActs）｜{rollSteps,...}=全量滚动（_detectRoll）
   void _maybePlayDeferredRoll({List? baseCells}) {
     final dr = _deferredRoll;
     if (dr == null || _animLock) return;
     _deferredRoll = null;
-    if (_rollActsDriven) return; // 2026-08-18：已逐步播完，缓存的滚木动画是冗余，跳过全量重放
     final base = baseCells ?? (dr['prevCells'] as List);
+    final acts = dr['acts'] as List<Map<String, dynamic>>?;
+    if (acts != null && acts.isNotEmpty) {
+      // 缓存的逐步驱动步：行动动画播完再播这一步，播完 onDone 里继续请求下一步
+      _playRollActs(acts, base, dr['newCells'] as List);
+      return;
+    }
+    if (_rollActsDriven) return; // 2026-08-18：已逐步播完，缓存的滚木动画是冗余，跳过全量重放
     _detectRoll(base, dr['newCells'] as List, rollSteps: dr['rollSteps'] as List?);
+  }
+
+  // 2026-08-21 兜底：endTurn 的 rollPending state 若在行动动画播放期间到达
+  // （_animLock=true，else if 分支的 !_animLock 挡住了 roll_step 请求），
+  // 动画播完后这里补发请求，避免滚木卡住不动
+  void _maybeRequestPendingRoll() {
+    if (!mounted) return;
+    final st = state;
+    if (st == null) return;
+    final rseq = (st['rollStepSeq'] as num?)?.toInt() ?? 0;
+    if (st['rollPending'] == true && rseq == _lastRollStepSeq && !_rollActsDriven) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.socket.emit('roll_step');
+      });
+    }
   }
 
   // 移动：单位逐格平移（浮层），旧棋盘为底
