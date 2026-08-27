@@ -162,7 +162,7 @@ class _TrainScreenState extends State<TrainScreen> {
                       child: GameScreen(
                         socket: socket,
                         state: gameState,
-                        packId: 'train',
+                        packId: 'default', // 必须用内置皮肤 id，否则单位贴图走自定义加载会空白
                         over: gameOver,
                         onBack: _newGame, // 结算页「返回」= 再来一局；退出走统计条按钮
                       ),
