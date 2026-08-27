@@ -1,6 +1,6 @@
 {
- "ts": "2026-08-27 14:54:43",
- "modelVersion": 42,
+ "ts": "2026-08-27 15:06:09",
+ "modelVersion": 47,
  "totalGames": 32,
  "results": [
   {
@@ -9,7 +9,7 @@
    "games": 4,
    "wins": 2,
    "winRate": 0.5,
-   "avgTurns": 38.2
+   "avgTurns": 38.5
   },
   {
    "opponent": "easy",
@@ -25,7 +25,7 @@
    "games": 4,
    "wins": 0,
    "winRate": 0.0,
-   "avgTurns": 31.2
+   "avgTurns": 41.0
   },
   {
    "opponent": "normal",
@@ -39,32 +39,32 @@
    "opponent": "hard",
    "side": 0,
    "games": 8,
-   "wins": 0,
-   "winRate": 0.0,
-   "avgTurns": 43.0
+   "wins": 1,
+   "winRate": 0.12,
+   "avgTurns": 41.0
   },
   {
    "opponent": "hard",
    "side": 1,
    "games": 8,
-   "wins": 4,
-   "winRate": 0.5,
-   "avgTurns": 38.9
+   "wins": 3,
+   "winRate": 0.38,
+   "avgTurns": 41.6
   }
  ],
  "summary": {
   "overall": 0.34,
-  "asLeft": 0.12,
-  "asRight": 0.56,
+  "asLeft": 0.19,
+  "asRight": 0.5,
   "vsEasy": 0.75,
   "vsNormal": 0.12,
   "vsHard": 0.25
  },
  "gameStats": {
-  "avgKills": 1.1,
-  "avgLosses": 1.8,
+  "avgKills": 1.5,
+  "avgLosses": 2.1,
   "avgProduce": 1.7,
-  "avgTurns": 40.8,
+  "avgTurns": 42.2,
   "maxDigit": 9
  },
  "bench": {
@@ -237,7 +237,7 @@
   ]
  },
  "score": {
-  "total": 43.1,
+  "total": 43.4,
   "max": 100,
   "grade": "D",
   "items": [
@@ -308,9 +308,9 @@
    {
     "key": "kd",
     "name": "运营·攻守效率",
-    "score": 2.5,
+    "score": 2.8,
     "max": 5,
-    "basis": "击杀/损失 = 1.1/1.8 = 0.61",
+    "basis": "击杀/损失 = 1.5/2.1 = 0.71",
     "std": "K/D≥1.6 满分；≥1 得 3.5；≥0.5 得 2"
    },
    {
@@ -326,7 +326,7 @@
     "name": "运营·持久能力",
     "score": 5,
     "max": 5,
-    "basis": "平均回合 40.8",
+    "basis": "平均回合 42.2",
     "std": "≥35 回合满分 5；每少 7 扣 1"
    }
   ]

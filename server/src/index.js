@@ -17,8 +17,35 @@ const VERSION = CFG.APP_VERSION;
 
 // ── AI 训练场统计（训练数据局数/步数/模型版本）──
 let trainStatsCache = null;
+
+// RL 状态实时读（RL 进程独立写文件，不能走缓存）
+function readRl() {
+  let rl = null;
+  try {
+    const rf = path.join(__dirname, '..', '..', 'train_data', 'rl_status.json');
+    if (fs.existsSync(rf)) rl = JSON.parse(fs.readFileSync(rf, 'utf8'));
+    if (rl && rlProcess && rlProcess.exitCode === null && rl.state !== 'running') rl.state = 'running';
+  } catch (_) {}
+  return rl;
+}
+function readRlHistory() {
+  let h = [];
+  try {
+    const hf = path.join(__dirname, '..', '..', 'train_data', 'rl_history.jsonl');
+    if (fs.existsSync(hf)) {
+      h = fs.readFileSync(hf, 'utf8').trim().split('\n').filter(Boolean)
+        .map(l => { try { return JSON.parse(l); } catch (_) { return null; } })
+        .filter(Boolean);
+    }
+  } catch (_) {}
+  return h;
+}
+
 function trainStats() {
-  if (trainStatsCache) return trainStatsCache;
+  if (trainStatsCache) {
+    // 静态部分走缓存，RL 状态/历史实时读
+    return { ...trainStatsCache, rl: readRl(), rlHistory: readRlHistory() };
+  }
   let games = 0, steps = 0;
   let aiGames = 0, aiWins = 0;
   const pvpSeries = []; // 与真人对局序列：{n, aiWin}（n=局序，aiWin=AI 是否获胜）
@@ -62,16 +89,9 @@ function trainStats() {
     const ef = path.join(__dirname, '..', '..', 'train_data', 'eval_result.json');
     if (fs.existsSync(ef)) evalInfo = JSON.parse(fs.readFileSync(ef, 'utf8'));
   } catch (_) {}
-  // 自博弈强化学习状态（rl_selfplay.py 心跳）
-  let rl = null;
-  try {
-    const rf = path.join(__dirname, '..', '..', 'train_data', 'rl_status.json');
-    if (fs.existsSync(rf)) rl = JSON.parse(fs.readFileSync(rf, 'utf8'));
-    if (rl && rlProcess && rlProcess.exitCode === null && rl.state !== 'running') rl.state = 'running';
-  } catch (_) {}
   trainStatsCache = {
     games, steps, modelVersion, modelUpdatedAt, training, evaluating, lastTrainAt, eval: evalInfo,
-    rl,
+    rl: readRl(), rlHistory: readRlHistory(),
     // 与真人对局：AI 场次/胜场/胜率 + 每局序列（折线图）
     aiGames, aiWins,
     aiWinRate: aiGames ? Math.round((aiWins / aiGames) * 1000) / 1000 : 0,

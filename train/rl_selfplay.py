@@ -24,6 +24,7 @@ BASE_DIR = '/root/aim'
 BC_WEIGHTS = os.path.join(BASE_DIR, 'server/public/downloads/train_weights.json')
 RL_WEIGHTS = os.path.join(BASE_DIR, 'server/public/downloads/train_weights_rl.json')
 STATUS_FILE = os.path.join(BASE_DIR, 'train_data', 'rl_status.json')
+HISTORY_FILE = os.path.join(BASE_DIR, 'train_data', 'rl_history.jsonl')  # RL 评估历史（波形图用）
 STOP_FILE = os.path.join(BASE_DIR, 'train', 'rl_stop')
 EVAL_FILE = os.path.join(BASE_DIR, 'train_data', 'eval_result.json')
 
@@ -234,7 +235,7 @@ def play_game(policy_a, policy_b, seed=0, record_for='both'):
         # 记录模型侧轨迹（视角归一化后）
         if record_for == 'both' or (record_for == 'a' and owner == 0) or (record_for == 'b' and owner == 1):
             x = p.encode(g)
-            slot = p.slot_of(a, owner == 1)
+            slot = p.slot_of(a, owner == 1, g)
             if slot is not None:
                 traj.append((x, slot, lp))
         while g.has_pending_roll:
@@ -324,6 +325,26 @@ def write_status(data):
         json.dump(data, f)
 
 
+def append_history(games, wr, avg):
+    """RL 评估历史（波形图数据源）"""
+    os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
+    with open(HISTORY_FILE, 'a', encoding='utf-8') as f:
+        f.write(json.dumps({'games': games, 'winRate': round(wr, 3),
+                            'avgReward': round(avg, 3),
+                            'ts': time.strftime('%Y-%m-%d %H:%M:%S')}) + '\n')
+
+
+def base_win_rate():
+    """原模型（BC 基础）能力：eval_result.json 的 vs hard 胜率"""
+    try:
+        if os.path.exists(EVAL_FILE):
+            ev = json.load(open(EVAL_FILE, encoding='utf-8'))
+            return ev.get('summary', {}).get('vsHard')
+    except Exception:
+        pass
+    return None
+
+
 def main():
     base_version = 0
     try:
@@ -347,13 +368,16 @@ def main():
     rewards = []
     batch = []
     t0 = time.time()
+    base_wr = base_win_rate()  # 原模型（BC 基础）vs hard 胜率（波形图基准线）
+    print(f'原模型 vs hard 基准胜率: {base_wr}', flush=True)
 
     while True:
         if os.path.exists(STOP_FILE):
             print('检测到停止信号，保存退出', flush=True)
             policy.save(RL_WEIGHTS, version=rl_version, base_version=base_version,
                         extra={'games': total_games, 'avgReward': round(float(np.mean(rewards[-50:])) if rewards else 0, 3)})
-            write_status({'state': 'stopped', 'games': total_games, 'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
+            write_status({'state': 'stopped', 'games': total_games, 'baseWinRate': base_wr,
+                          'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
             return
         # 自博弈一局（策略 vs 延迟快照）
         winner, traj = play_game(policy, opponent, seed=total_games)
@@ -375,15 +399,17 @@ def main():
             wr = eval_vs_hard(policy, games=10)
             avg = float(np.mean(rewards[-EVAL_EVERY:])) if rewards else 0
             print(f'[{total_games}局] 近{EVAL_EVERY}局均奖 {avg:.2f} vs hard {wr:.0%} 耗时{(time.time()-t0)/60:.1f}m', flush=True)
+            append_history(total_games, wr, avg)  # 波形图历史
             policy.save(RL_WEIGHTS, version=rl_version, base_version=base_version,
                         extra={'games': total_games, 'avgReward': round(avg, 3), 'winRateVsHard': round(wr, 3)})
             write_status({'state': 'running', 'games': total_games, 'avgReward': round(avg, 3),
                           'winRateVsHard': round(wr, 3), 'rlVersion': rl_version,
-                          'baseVersion': base_version, 'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
+                          'baseVersion': base_version, 'baseWinRate': base_wr,
+                          'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
         elif total_games % SAVE_EVERY == 0:
             write_status({'state': 'running', 'games': total_games,
                           'avgReward': round(float(np.mean(rewards[-SAVE_EVERY:])) if rewards else 0, 3),
-                          'rlVersion': rl_version, 'baseVersion': base_version,
+                          'rlVersion': rl_version, 'baseVersion': base_version, 'baseWinRate': base_wr,
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
 
 

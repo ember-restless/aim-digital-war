@@ -497,8 +497,11 @@ class AimGame:
             self._rs_idx += 1
             self._rs_step = 1
             if self._rs_idx < len(self._rs_rollers):
-                self._rs_pos = self.cells.index(self._rs_rollers[self._rs_idx])
-                return self.roll_step_once(owner)
+                if self._rs_rollers[self._rs_idx] in self.cells:
+                    self._rs_pos = self.cells.index(self._rs_rollers[self._rs_idx])
+                    return self.roll_step_once(owner)
+                self._finish_roll()
+                return None
             self._finish_roll()
             return None
         res = self._roll_one_step(roller, d)
@@ -510,10 +513,13 @@ class AimGame:
             self._rs_idx += 1
             self._rs_step = 1
             if self._rs_idx < len(self._rs_rollers):
-                self._rs_pos = self.cells.index(self._rs_rollers[self._rs_idx])
-                if acts:
-                    return acts
-                return self.roll_step_once(owner)
+                if self._rs_rollers[self._rs_idx] in self.cells:
+                    self._rs_pos = self.cells.index(self._rs_rollers[self._rs_idx])
+                    if acts:
+                        return acts
+                    return self.roll_step_once(owner)
+                self._finish_roll()
+                return acts if acts else None
             self._finish_roll()
             return acts if acts else None
         return acts
