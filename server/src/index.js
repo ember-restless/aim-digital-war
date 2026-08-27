@@ -20,13 +20,29 @@ let trainStatsCache = null;
 function trainStats() {
   if (trainStatsCache) return trainStatsCache;
   let games = 0, steps = 0;
+  let aiGames = 0, aiWins = 0;
+  const pvpSeries = []; // 与真人对局序列：{n, aiWin}（n=局序，aiWin=AI 是否获胜）
   const dataFile = path.join(__dirname, '..', '..', 'train_data', 'games.jsonl');
   try {
     if (fs.existsSync(dataFile)) {
       const lines = fs.readFileSync(dataFile, 'utf8').trim().split('\n');
       games = lines.length;
+      let seq = 0;
       for (const l of lines) {
-        try { steps += (JSON.parse(l).steps || []).length; } catch (_) {}
+        try {
+          const g = JSON.parse(l);
+          steps += (g.steps || []).length;
+          // 从第一步的人类 owner 推断人类所在侧，算 AI 胜负
+          const st = g.steps || [];
+          const humanSide = st.length ? (st[0].owner ?? -1) : -1;
+          if (humanSide === 0 || humanSide === 1) {
+            seq++;
+            const aiWin = (humanSide === 0 && g.winner === 1) || (humanSide === 1 && g.winner === 0);
+            aiGames++;
+            if (aiWin) aiWins++;
+            pvpSeries.push({ n: seq, aiWin: aiWin ? 1 : 0 });
+          }
+        } catch (_) {}
       }
     }
   } catch (_) {}
@@ -46,7 +62,13 @@ function trainStats() {
     const ef = path.join(__dirname, '..', '..', 'train_data', 'eval_result.json');
     if (fs.existsSync(ef)) evalInfo = JSON.parse(fs.readFileSync(ef, 'utf8'));
   } catch (_) {}
-  trainStatsCache = { games, steps, modelVersion, modelUpdatedAt, training, evaluating, lastTrainAt, eval: evalInfo };
+  trainStatsCache = {
+    games, steps, modelVersion, modelUpdatedAt, training, evaluating, lastTrainAt, eval: evalInfo,
+    // 与真人对局：AI 场次/胜场/胜率 + 每局序列（折线图）
+    aiGames, aiWins,
+    aiWinRate: aiGames ? Math.round((aiWins / aiGames) * 1000) / 1000 : 0,
+    pvpSeries,
+  };
   return trainStatsCache;
 }
 
