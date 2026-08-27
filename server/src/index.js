@@ -630,6 +630,25 @@ const dlServer = http.createServer((req, res) => {
     res.end(JSON.stringify(trainStats()));
     return;
   }
+  // ── AI 训练场：训练日志尾部（监视台用）──
+  if (pathname === '/api/train/log') {
+    let log = '';
+    const logFile = path.join(__dirname, '..', '..', 'train', 'train.log');
+    try {
+      if (fs.existsSync(logFile)) {
+        const size = fs.statSync(logFile).size;
+        const start = Math.max(0, size - 8192); // 尾部 8KB
+        const fd = fs.openSync(logFile, 'r');
+        const buf = Buffer.alloc(size - start);
+        fs.readSync(fd, buf, 0, buf.length, start);
+        fs.closeSync(fd);
+        log = buf.toString('utf8');
+      }
+    } catch (_) {}
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ log }));
+    return;
+  }
   let url = decodeURIComponent(req.url.split('?')[0]);
   if (url === '/') url = '/index.html';
   // 路径前缀归一：req.url 形如 /downloads/foo 时，path.join 会拼成 DOWNLOAD_DIR/downloads/foo，需要剥掉 /downloads 前缀
