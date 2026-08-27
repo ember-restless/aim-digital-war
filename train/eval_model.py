@@ -175,8 +175,8 @@ def run_eval(weights_path, games_spec='easy=3,normal=3,hard=5', out_path=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--games', default='easy=3,normal=3,hard=5',
-                    help='各对手每侧局数，如 easy=3,normal=3,hard=5')
+    ap.add_argument('--games', default='easy=4,normal=4,hard=8',
+                    help='各对手每侧局数，如 easy=4,normal=4,hard=8（与 triggerEval/RL 训练统一，16 局降噪）')
     args = ap.parse_args()
     run_eval(WEIGHTS, args.games, OUT)
 

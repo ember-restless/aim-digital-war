@@ -425,11 +425,16 @@ def update(policy, batch, lr=LR, epochs=PPO_EPOCHS, clip=PPO_CLIP):
 
 
 # ── 评估：完整测试（对局 + 能力考试 + 综合评分 0-100）──
+# 规格与 triggerEval/monitor 统一（easy=4,normal=4,hard=8 = 16 局）：
+# 8 局评估噪声太大（vsHard 4 局赢 1 局=12% 与赢 3 局=38% 同权重可复现），
+# 之前 RL 训练内 58 分 vs 部署评估 48 分的 10 分差就是规格不一致导致的。
+EVAL_SPEC = 'easy=4,normal=4,hard=8'
+
 def eval_model_score(policy, tmp_path='/root/aim/train_data/rl_eval_tmp.json'):
     """保存策略到临时权重，跑完整评估，返回 (score_total, grade)"""
     policy.save(tmp_path, version=0)
     from eval_model import run_eval
-    data = run_eval(tmp_path, 'easy=2,normal=2,hard=4')
+    data = run_eval(tmp_path, EVAL_SPEC)
     if not data:
         return None, None
     sc = data['score']
