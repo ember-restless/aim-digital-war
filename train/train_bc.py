@@ -183,15 +183,21 @@ def build_samples(games):
 def xavier(fan_in, fan_out, rng):
     return rng.uniform(-1, 1, (fan_in, fan_out)) * np.sqrt(6.0 / (fan_in + fan_out))
 
-def train_mlp(X, Y, epochs=80, lr=0.001, batch=64, seed=42):
+def train_mlp(X, Y, epochs=80, lr=0.001, batch=64, seed=42, init=None):
     rng = np.random.default_rng(seed)
     N = X.shape[0]
-    W1 = xavier(IN_DIM, HIDDEN, rng)
-    b1 = np.zeros(HIDDEN)
-    W2 = xavier(HIDDEN, HIDDEN, rng)
-    b2 = np.zeros(HIDDEN)
-    Wo = xavier(HIDDEN, OUT_SLOTS, rng)
-    bo = np.zeros(OUT_SLOTS)
+    if init:
+        # warm start：从现有权重（可能含 RL 成果）继续训练，不从头学
+        W1 = init['w1'].copy(); b1 = init['b1'].copy()
+        W2 = init['w2'].copy(); b2 = init['b2'].copy()
+        Wo = init['wo'].copy(); bo = init['bo'].copy()
+    else:
+        W1 = xavier(IN_DIM, HIDDEN, rng)
+        b1 = np.zeros(HIDDEN)
+        W2 = xavier(HIDDEN, HIDDEN, rng)
+        b2 = np.zeros(HIDDEN)
+        Wo = xavier(HIDDEN, OUT_SLOTS, rng)
+        bo = np.zeros(OUT_SLOTS)
     # Adam 状态
     m = [np.zeros_like(W1), np.zeros_like(b1), np.zeros_like(W2), np.zeros_like(b2), np.zeros_like(Wo), np.zeros_like(bo)]
     v = [np.zeros_like(x) for x in m]
@@ -285,7 +291,24 @@ def main():
     print(f'样本数: {len(X)}  （{stats}）')
     print('开始训练 MLP ...')
     t0 = time.time()
-    params = train_mlp(X, Y, epochs=args.epochs, lr=args.lr)
+    # warm start：从现有权重继续（RL 部署后不会被从零训练覆盖，平滑演进）
+    init = None
+    if os.path.exists(WEIGHTS_FILE):
+        try:
+            w = json.load(open(WEIGHTS_FILE, encoding='utf-8'))
+            if w.get('out') == OUT_SLOTS:
+                init = {
+                    'w1': np.array(w['w1'], dtype=np.float64).reshape(IN_DIM, HIDDEN),
+                    'b1': np.array(w['b1'], dtype=np.float64),
+                    'w2': np.array(w['w2'], dtype=np.float64).reshape(HIDDEN, HIDDEN),
+                    'b2': np.array(w['b2'], dtype=np.float64),
+                    'wo': np.array(w['wo'], dtype=np.float64).reshape(HIDDEN, OUT_SLOTS),
+                    'bo': np.array(w['bo'], dtype=np.float64),
+                }
+                print('warm start：基于现有权重继续训练')
+        except Exception:
+            pass
+    params = train_mlp(X, Y, epochs=args.epochs, lr=args.lr, init=init)
     print(f'训练耗时 {time.time() - t0:.1f}s')
     if args.deploy:
         v = save_weights(params, WEIGHTS_FILE)

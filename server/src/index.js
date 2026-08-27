@@ -754,6 +754,39 @@ const dlServer = http.createServer((req, res) => {
     res.end(JSON.stringify({ ok: true, msg: 'RL 停止中（保存后退出）' }));
     return;
   }
+  // ── 自博弈强化学习：部署 RL 权重为游戏 AI（手动按钮）──
+  if (pathname === '/api/train/rl/deploy') {
+    const rlFile = path.join(DOWNLOAD_DIR, 'train_weights_rl.json');
+    const mainFile = path.join(DOWNLOAD_DIR, 'train_weights.json');
+    if (!fs.existsSync(rlFile)) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, msg: '没有 RL 权重（先跑完一次 RL）' }));
+      return;
+    }
+    try {
+      const rl = JSON.parse(fs.readFileSync(rlFile, 'utf8'));
+      // 版本号接续主权重 +1，标记来源 RL
+      let ver = 1;
+      try {
+        if (fs.existsSync(mainFile)) {
+          ver = (JSON.parse(fs.readFileSync(mainFile, 'utf8')).version || 0) + 1;
+        }
+      } catch (_) {}
+      rl.version = ver;
+      rl.updatedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
+      rl.rlDeployed = true;
+      rl.rlSourceVersion = rl.rlVersion || null;
+      fs.writeFileSync(mainFile, JSON.stringify(rl));
+      trainStatsCache = null;
+      console.log(`[rl] RL 权重已部署为游戏 AI（v${ver}）`);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: true, msg: '已部署（v' + ver + '）', version: ver }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, msg: '部署失败: ' + e.message }));
+    }
+    return;
+  }
   // ── AI 训练场：训练日志尾部（监视台用）──
   if (pathname === '/api/train/log') {
     let log = '';
