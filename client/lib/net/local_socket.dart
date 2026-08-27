@@ -45,6 +45,8 @@ class LocalAimSocket extends AIMSocket {
   void connect() {
     // 本地无连接：直接开局，推人类视角
     onEvent?.call('game_state', game.viewFor(humanSide));
+    // AI 先手（人类在右，aiSide=0）时立即开始决策——否则没人触发 AI 行动
+    _maybeDriveAi();
   }
 
   void _pushState() {
