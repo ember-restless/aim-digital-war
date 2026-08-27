@@ -56,12 +56,19 @@ R_REPEAT_WARN = -0.6  # 第二次重复操作警告（第三次直接判负）
 R_WIN = 5.0           # 终局胜利（主导信号）
 R_LOSE = -5.0         # 终局失败
 DEVOUR_PRIOR = 1.5    # 吞敌槽探索先验（logit 偏置，仅训练期引导，参与更新可被拉回）
-EPS = 0.05            # ε 均匀探索基础值：稀有合法动作（吞敌）也有公平机会被尝试
+EPS = 0.05            # ε 均匀探索基础值（固定：稀有合法动作也有公平机会被尝试）
 # ── 自适应探索（牢大定）：分数长时间无突破 → 提高噪点激发新行为 ──
+# 噪点用 temperature（softmax 温度）：概率变平但保持相对偏好，比 ε 均匀随机平滑——
+# ε 提到 0.30 会让 30% 的步完全随机，训练数据被污染，自博弈胜率反而掉（实测 50%→44%）。
 PLATEAU_WINDOW = 5    # 用最近 N 次评估判定平台期
 PLATEAU_DELTA = 2.5   # 窗口内分数波动 < 此值 → 平台期（16 局评估噪声约 ±2，留余量）
-EPS_STEP = 0.05       # 每持续一个平台档，探索率 +0.05
-EPS_MAX = 0.30        # 探索率封顶（太高会破坏已学行为）
+TEMP_BASE = 1.0       # 采样温度基础值
+TEMP_STEP = 0.3       # 每持续一个平台档，温度 +0.3
+TEMP_MAX = 2.5        # 温度封顶
+# ── 速战速决奖励（牢大定）：对齐评估「速战速决」指标 ──
+# 20 回合内赢 → 全额 R_WIN；之后每拖 10 回合扣 1（下限 0.5）；输仍 R_LOSE
+WIN_TURNS_OK = 20
+WIN_TURN_PENALTY = 1.0   # 每 10 回合扣分（WIN_TURN_PENALTY * 10 回合）
 
 
 def xavier(fan_in, fan_out, rng):
@@ -75,7 +82,8 @@ class RlPolicy:
 
     def __init__(self, weights_path=None, seed=0):
         self.rng = np.random.default_rng(seed)
-        self.eps = EPS   # 自适应探索率（平台期会动态调高）
+        self.eps = EPS       # ε 均匀探索（固定基础值）
+        self.temp = TEMP_BASE  # 采样温度（平台期自适应提高）
         if weights_path and os.path.exists(weights_path):
             w = json.load(open(weights_path, encoding='utf-8'))
             self.w1 = np.array(w['w1'], dtype=np.float64).reshape(HIDDEN, IN_DIM)
@@ -111,6 +119,7 @@ class RlPolicy:
         p = RlPolicy.__new__(RlPolicy)
         p.rng = np.random.default_rng(0)
         p.eps = self.eps
+        p.temp = self.temp
         for k in ('w1', 'b1', 'w2', 'b2', 'wo', 'bo', 'wv', 'bv'):
             setattr(p, k, getattr(self, k).copy())
         return p
@@ -180,7 +189,7 @@ class RlPolicy:
                     return True
         return False
 
-    def act(self, game, sample=True, temp=1.0, fallback_seed=0):
+    def act(self, game, sample=True, fallback_seed=0):
         """返回 (action, logprob) ；阶段选择用启发式兜底（与 BC 推理一致）"""
         owner = game.turn
         if game.phase is None:
@@ -206,7 +215,7 @@ class RlPolicy:
             return playable[0], 0.0
         logits = logits[slots]
         if sample:
-            e = np.exp((logits - logits.max()) / temp)
+            e = np.exp((logits - logits.max()) / self.temp)
             p = e / e.sum()
             n = len(cands)
             if self.rng.random() < self.eps:
@@ -354,9 +363,14 @@ def play_game(policy_a, policy_b, seed=0, record_for='a'):
                 traj.append((x_before, slot, lp, step_r + pending[owner], owner))
                 pending[owner] = 0.0
     # ── 终局奖励（并入最后一步，含未结算的滚木奖励）──
+    # 速战速决：WIN_TURNS_OK 回合内赢 → 全额 R_WIN，之后每拖 10 回合扣 1（下限 0.5）
     if g.winner is not None and traj:
         x, slot, lp, rr, own = traj[-1]
-        traj[-1] = (x, slot, lp, rr + pending[own] + (R_WIN if own == g.winner else R_LOSE), own)
+        if own == g.winner:
+            win_r = max(0.5, R_WIN - max(0, g.turn_count - WIN_TURNS_OK) / 10.0 * WIN_TURN_PENALTY)
+        else:
+            win_r = R_LOSE
+        traj[-1] = (x, slot, lp, rr + pending[own] + win_r, own)
     return g.winner, traj, devour_stat
 
 
@@ -521,9 +535,9 @@ def main():
             print('检测到停止信号，保存退出', flush=True)
             policy.save(RL_WEIGHTS, version=rl_version, base_version=base_version,
                         extra={'games': total_games, 'avgReward': round(float(np.mean(rewards[-50:])) if rewards else 0, 3),
-                               'eps': policy.eps})
+                               'temp': policy.temp})
             write_status({'state': 'stopped', 'games': total_games, 'baseWinRate': base_wr,
-                          'eps': policy.eps,
+                          'temp': policy.temp,
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
             return
         # 对手：1/3 局打规则 AI（轮换 easy/normal/hard，对齐评估目标），
@@ -548,12 +562,12 @@ def main():
             policy.save(RL_WEIGHTS, version=rl_version, base_version=base_version,
                         extra={'games': total_games, 'avgReward': round(avg, 3),
                                'score': score, 'grade': grade, 'targetGames': target_games,
-                               'eps': policy.eps})
+                               'temp': policy.temp})
             write_status({'state': 'stopped', 'games': total_games, 'avgReward': round(avg, 3),
                           'score': score, 'grade': grade, 'baseWinRate': base_wr, 'baseScore': base_score,
-                          'targetGames': target_games, 'eps': policy.eps,
+                          'targetGames': target_games, 'temp': policy.temp,
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
-            print(f'目标局数 {target_games} 达成，自动停止。综合分 {score}（{grade}） ε{policy.eps:.2f}', flush=True)
+            print(f'目标局数 {target_games} 达成，自动停止。综合分 {score}（{grade}） 温度{policy.temp:.2f}', flush=True)
             return
         # 每步即时奖励 → 折现 return-to-go（按局），入 batch
         if traj:
@@ -573,9 +587,9 @@ def main():
         if total_games % EVAL_EVERY == 0:
             score, grade = eval_model_score(policy)
             avg = float(np.mean(rewards[-EVAL_EVERY:])) if rewards else 0
-            print(f'[{total_games}局] 均奖 {avg:.2f} 综合分 {score}（{grade}） ε{policy.eps:.2f} 吞敌{devour_total[0]} 吞己{devour_total[1]} 自博弈胜率{sp_wins/total_games*100:.0f}% 耗时{(time.time()-t0)/60:.1f}m', flush=True)
+            print(f'[{total_games}局] 均奖 {avg:.2f} 综合分 {score}（{grade}） 温度{policy.temp:.2f} 吞敌{devour_total[0]} 吞己{devour_total[1]} 自博弈胜率{sp_wins/total_games*100:.0f}% 耗时{(time.time()-t0)/60:.1f}m', flush=True)
             append_history(total_games, score, grade, avg)  # 波形图历史（综合得分）
-            # ── 自适应探索：分数平台期 → 提高 ε 噪点激发新行为（牢大定）──
+            # ── 自适应探索：分数平台期 → 提高采样温度激发新行为（牢大定）──
             if score is not None:
                 score_window.append(score)
                 if len(score_window) > PLATEAU_WINDOW:
@@ -583,20 +597,20 @@ def main():
                 if len(score_window) >= PLATEAU_WINDOW:
                     spread = max(score_window) - min(score_window)
                     if spread < PLATEAU_DELTA:
-                        plateau_count += 1   # 平台期：探索档位 +1
+                        plateau_count += 1   # 平台期：温度档位 +1
                     else:
-                        plateau_count = 0    # 分数在动，恢复正常探索
-                new_eps = min(EPS + EPS_STEP * plateau_count, EPS_MAX)
-                if new_eps != policy.eps:
-                    print(f'  自适应探索：ε {policy.eps:.2f} → {new_eps:.2f}（平台档 {plateau_count}）', flush=True)
-                    policy.eps = new_eps
+                        plateau_count = 0    # 分数在动，恢复正常温度
+                new_temp = min(TEMP_BASE + TEMP_STEP * plateau_count, TEMP_MAX)
+                if new_temp != policy.temp:
+                    print(f'  自适应探索：温度 {policy.temp:.2f} → {new_temp:.2f}（平台档 {plateau_count}）', flush=True)
+                    policy.temp = new_temp
             policy.save(RL_WEIGHTS, version=rl_version, base_version=base_version,
                         extra={'games': total_games, 'avgReward': round(avg, 3),
-                               'score': score, 'grade': grade, 'eps': policy.eps})
+                               'score': score, 'grade': grade, 'temp': policy.temp})
             write_status({'state': 'running', 'games': total_games, 'avgReward': round(avg, 3),
                           'score': score, 'grade': grade, 'rlVersion': rl_version,
                           'baseVersion': base_version, 'baseWinRate': base_wr, 'baseScore': base_score,
-                          'eps': policy.eps,
+                          'temp': policy.temp,
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
         elif total_games % SAVE_EVERY == 0:
             write_status({'state': 'running', 'games': total_games,
