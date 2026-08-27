@@ -60,6 +60,14 @@ class _TrainScreenState extends State<TrainScreen> {
   }
 
   void _newGame() {
+    // 非首局：先关旧 socket（AI 延迟回调防呆），并清掉结算页/棋盘状态——
+    // 否则 GameScreen 的 over 残留，结算页一直盖着，看起来"再来一局没效果"
+    if (gameState != null) socket.dispose();
+    setState(() {
+      gameOver = null;
+      gameState = null;
+      _uploadMsg = '';
+    });
     socket = LocalAimSocket(limit: 16, aiLevel: AiLevel.hard, humanSide: _humanSide);
     socket.recordMode = true;
     socket.aiDecider = trainAi.hasModel ? trainAi.decide : null;
