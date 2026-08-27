@@ -1,71 +1,71 @@
 {
- "ts": "2026-08-27 13:56:53",
- "modelVersion": 16,
- "totalGames": 16,
+ "ts": "2026-08-27 14:06:26",
+ "modelVersion": 18,
+ "totalGames": 32,
  "results": [
   {
    "opponent": "easy",
    "side": 0,
-   "games": 2,
+   "games": 4,
    "wins": 2,
-   "winRate": 1.0,
-   "avgTurns": 41.0
+   "winRate": 0.5,
+   "avgTurns": 43.0
   },
   {
    "opponent": "easy",
    "side": 1,
-   "games": 2,
-   "wins": 1,
+   "games": 4,
+   "wins": 2,
    "winRate": 0.5,
-   "avgTurns": 26.0
+   "avgTurns": 42.8
   },
   {
    "opponent": "normal",
-   "side": 0,
-   "games": 2,
-   "wins": 1,
-   "winRate": 0.5,
-   "avgTurns": 32.0
-  },
-  {
-   "opponent": "normal",
-   "side": 1,
-   "games": 2,
-   "wins": 1,
-   "winRate": 0.5,
-   "avgTurns": 51.0
-  },
-  {
-   "opponent": "hard",
    "side": 0,
    "games": 4,
    "wins": 1,
    "winRate": 0.25,
-   "avgTurns": 30.0
+   "avgTurns": 26.5
+  },
+  {
+   "opponent": "normal",
+   "side": 1,
+   "games": 4,
+   "wins": 2,
+   "winRate": 0.5,
+   "avgTurns": 63.8
+  },
+  {
+   "opponent": "hard",
+   "side": 0,
+   "games": 8,
+   "wins": 1,
+   "winRate": 0.12,
+   "avgTurns": 29.2
   },
   {
    "opponent": "hard",
    "side": 1,
-   "games": 4,
-   "wins": 0,
-   "winRate": 0.0,
-   "avgTurns": 30.0
+   "games": 8,
+   "wins": 1,
+   "winRate": 0.12,
+   "avgTurns": 33.4
   }
  ],
  "summary": {
-  "overall": 0.38,
-  "asLeft": 0.5,
-  "asRight": 0.25,
-  "vsEasy": 0.75,
-  "vsNormal": 0.5,
+  "overall": 0.28,
+  "asLeft": 0.25,
+  "asRight": 0.31,
+  "vsEasy": 0.5,
+  "vsNormal": 0.38,
   "vsHard": 0.12
  },
  "gameStats": {
-  "avgKills": 1.8,
-  "avgLosses": 1.9,
-  "avgProduce": 0.9,
-  "avgTurns": 33.8,
-  "maxDigit": 8
+  "avgKills": 1.4,
+  "avgLosses": 1.8,
+  "avgProduce": 1.2,
+  "avgTurns": 37.7,
+  "maxDigit": 9
  },
  "bench": {
   "score": 11,
@@ -237,24 +237,24 @@
   ]
  },
  "score": {
-  "total": 43.4,
+  "total": 38.8,
   "max": 100,
   "grade": "D",
   "items": [
    {
     "key": "vsEasy",
     "name": "对战·easy",
-    "score": 4.2,
+    "score": 0.5,
     "max": 8,
-    "basis": "胜率 75%",
+    "basis": "胜率 50%",
     "std": "100% 胜率满分 8 分；每降 10% 扣 1.5 分"
    },
    {
     "key": "vsNormal",
     "name": "对战·normal",
-    "score": 2.0,
+    "score": 0,
     "max": 12,
-    "basis": "胜率 50%",
+    "basis": "胜率 38%",
     "std": "100% 胜率满分 12 分；每降 10% 扣 2 分"
    },
    {
@@ -300,25 +300,25 @@
    {
     "key": "eco",
     "name": "运营·造兵效率",
-    "score": 2.8,
+    "score": 3.4,
     "max": 5,
-    "basis": "平均造兵 0.9",
+    "basis": "平均造兵 1.2",
     "std": "≥2 满分 5；每少 0.5 扣 1"
    },
    {
     "key": "kd",
     "name": "运营·攻守效率",
-    "score": 3.4,
+    "score": 2.9,
     "max": 5,
-    "basis": "击杀/损失 = 1.8/1.9 = 0.95",
+    "basis": "击杀/损失 = 1.4/1.8 = 0.78",
     "std": "K/D≥1.6 满分；≥1 得 3.5；≥0.5 得 2"
    },
    {
     "key": "dev",
     "name": "运营·发展上限",
-    "score": 4,
+    "score": 5,
     "max": 5,
-    "basis": "单局最高数字 8",
+    "basis": "单局最高数字 9",
     "std": "达到 9 满分 5；8 得 4；7 得 3；6 得 2"
    },
    {
@@ -326,7 +326,7 @@
     "name": "运营·持久能力",
     "score": 5,
     "max": 5,
-    "basis": "平均回合 33.8",
+    "basis": "平均回合 37.7",
     "std": "≥35 回合满分 5；每少 7 扣 1"
    }
   ]

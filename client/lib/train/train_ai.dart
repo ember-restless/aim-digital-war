@@ -71,8 +71,15 @@ class TrainAi {
 
   // AI 回合决策（训练场用）
   Map<String, dynamic>? decide(AimGame game) {
-    if (!hasModel || _fallback == null) return _fallback?.decide(game);
     final owner = game.turn;
+    if (game.phase == null) {
+      // 基地没了 / 基地前被桥堵 → 造兵阶段无意义（造兵点=0，选完直接自动过回合=「跳过回合」）
+      // 该拦截必须在 hasModel 检查之前：无模型（回退启发式）时同样生效
+      if (!_canProduce(game, owner)) {
+        return {'type': 'choosePhase', 'phase': 'action'};
+      }
+    }
+    if (!hasModel || _fallback == null) return _fallback?.decide(game);
     if (game.phase == null) {
       // 阶段选择：用启发式（网络只做行动/造兵内部选择）
       return _fallback!.decide(game);
@@ -107,7 +114,23 @@ class TrainAi {
     return bestAct ?? playable.first;
   }
 
-  // ── 前向传播：relu(relu(x·W1+b1)·W2+b2)·Wo+bo ──
+  // 能否造兵：有基地 8 且基地前（朝敌方向）不是桥
+  // doProduce 逻辑：基地前空地/己方 → +1；敌方 → 攻击 -1；桥 → 不合法
+  bool _canProduce(AimGame game, int owner) {
+    final dir = owner == 0 ? 1 : -1;
+    for (var i = 0; i < game.cells.length; i++) {
+      final c = game.cells[i];
+      if (c.o == owner && c.v == 8) {
+        final j = i + dir;
+        if (j >= 0 && j < game.cells.length) {
+          if (!game.cells[j].bridge) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // 前向传播：relu(relu(x·W1+b1)·W2+b2)·Wo+bo ──
   List<double>? _forward(List<double> x) {
     final w1 = _w1, b1 = _b1, w2 = _w2, b2 = _b2, wo = _wo, bo = _bo;
     if (w1 == null || b1 == null || w2 == null || b2 == null || wo == null || bo == null) return null;
