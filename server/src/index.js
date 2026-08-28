@@ -51,9 +51,20 @@ function readEvalInfo() {
 }
 
 function trainStats() {
+  // 模型版本/更新时间：每次实时读权重文件——手动部署/回滚/训练后立即反映，
+  // 不依赖缓存失效（否则监视台显示旧版本误导）
+  let modelVersion = 0, modelUpdatedAt = null;
+  const wf = path.join(DOWNLOAD_DIR, 'train_weights.json');
+  try {
+    if (fs.existsSync(wf)) {
+      const w = JSON.parse(fs.readFileSync(wf, 'utf8'));
+      modelVersion = w.version || 1;
+      modelUpdatedAt = w.updatedAt || null;
+    }
+  } catch (_) {}
   if (trainStatsCache) {
-    // 静态部分走缓存，RL 状态/历史 + 模型评估实时读（eval 曾被缓存成旧值误导监视台）
-    return { ...trainStatsCache, rl: readRl(), rlHistory: readRlHistory(), eval: readEvalInfo() };
+    // 静态部分走缓存，RL 状态/历史 + 模型评估 + 版本实时读（eval 曾被缓存成旧值误导监视台）
+    return { ...trainStatsCache, modelVersion, modelUpdatedAt, rl: readRl(), rlHistory: readRlHistory(), eval: readEvalInfo() };
   }
   let games = 0, steps = 0;
   let aiGames = 0, aiWins = 0;
@@ -90,16 +101,7 @@ function trainStats() {
       }
     }
   } catch (_) {}
-  // 模型版本：权重文件 mtime 次数（每次部署 = 版本 +1）
-  let modelVersion = 0, modelUpdatedAt = null;
-  const wf = path.join(DOWNLOAD_DIR, 'train_weights.json');
-  try {
-    if (fs.existsSync(wf)) {
-      const w = JSON.parse(fs.readFileSync(wf, 'utf8'));
-      modelVersion = w.version || 1;
-      modelUpdatedAt = w.updatedAt || null;
-    }
-  } catch (_) {}
+  // 模型版本：实时读（上面已读，见函数开头——每次调用刷新）
   // 模型实力评估结果（监视台展示：vs easy/normal/hard 胜率等）——实时读
   const evalInfo = readEvalInfo();
   trainStatsCache = {
