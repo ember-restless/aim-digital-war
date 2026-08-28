@@ -282,13 +282,18 @@ def save_weights(params, out_path):
     # hidden 用实际权重维度（warm start 64 单元时是 64，不能写死 HIDDEN=128——
     # 否则加载端按 hidden 字段 reshape 会崩，游戏端 AI 直接失效）
     hidden = int(params['b1'].shape[0])
+    # 关键：文件按「加载端语义」保存——推理端（eval_ai/train_ai.dart）按
+    # (hidden,in) 行主序索引 w1[i*hidden... ] 不对，是 w1[i*in + k]（i=hidden 行）：
+    # 即期望 flat = W1.T 的行主序。train_mlp 内部是 W1=(in,hidden)，
+    # 保存时必须转置（w2 方形转置后行主序不同，wo 同理），否则部署的模型
+    # 是训练模型的固定重排，行为完全不可控（曾导致 AI 行为怪异）。
     data = {
         'version': version,
         'updatedAt': time.strftime('%Y-%m-%d %H:%M:%S'),
         'in': IN_DIM, 'hidden': hidden, 'out': OUT_SLOTS,
-        'w1': flat(params['w1']), 'b1': flat(params['b1']),
-        'w2': flat(params['w2']), 'b2': flat(params['b2']),
-        'wo': flat(params['wo']), 'bo': flat(params['bo']),
+        'w1': flat(params['w1'].T), 'b1': flat(params['b1']),
+        'w2': flat(params['w2'].T), 'b2': flat(params['b2']),
+        'wo': flat(params['wo'].T), 'bo': flat(params['bo']),
     }
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, 'w', encoding='utf-8') as f:
@@ -335,12 +340,13 @@ def main():
             w = json.load(open(WEIGHTS_FILE, encoding='utf-8'))
             if w.get('out') == OUT_SLOTS and w.get('in') == IN_DIM:
                 old_hidden = int(w.get('hidden', HIDDEN))
+                # 文件是 (hidden,in) 行主序（加载端语义），train_mlp 内部要 (in,hidden) → 转置还原
                 init = {
-                    'w1': np.array(w['w1'], dtype=np.float64).reshape(IN_DIM, old_hidden),
+                    'w1': np.array(w['w1'], dtype=np.float64).reshape(old_hidden, IN_DIM).T,
                     'b1': np.array(w['b1'], dtype=np.float64),
-                    'w2': np.array(w['w2'], dtype=np.float64).reshape(old_hidden, old_hidden),
+                    'w2': np.array(w['w2'], dtype=np.float64).reshape(old_hidden, old_hidden).T,
                     'b2': np.array(w['b2'], dtype=np.float64),
-                    'wo': np.array(w['wo'], dtype=np.float64).reshape(old_hidden, OUT_SLOTS),
+                    'wo': np.array(w['wo'], dtype=np.float64).reshape(OUT_SLOTS, old_hidden).T,
                     'bo': np.array(w['bo'], dtype=np.float64),
                 }
                 print(f'warm start：基于现有权重继续训练（hidden={old_hidden}）')
