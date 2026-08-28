@@ -306,14 +306,14 @@ def main():
     args = ap.parse_args()
 
     games = load_games(DATA_FILE)
-    print(f'对局数: {len(games)}')
-    if not games:
-        print('没有训练数据，先去训练场打几局（http://192.140.166.178:5000/train/）')
-        return
     if args.extra_data:
         extra = load_games(args.extra_data)
         print(f'附加数据: {args.extra_data} → {len(extra)} 局')
         games = games + extra
+    print(f'对局数: {len(games)}')
+    if not games:
+        print('没有训练数据，先去训练场打几局（http://192.140.166.178:5000/train/）')
+        return
     X, Y, stats = build_samples(games)
     if X is None:
         print(f'无有效样本（{stats}）')
