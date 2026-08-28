@@ -96,10 +96,12 @@ class LocalAimSocket extends AIMSocket {
 
   // 记录人类一步：applyAction 成功后调用（状态为操作前快照）
   // 双人模式记录双方（owner=操作者），单人只记录人类侧
-  void _recordHumanStep(Map<String, dynamic> action, int snapTurn, String? snapPhase,
-      int snapPoints, int snapProduce, int owner) {
+  // cells 必须传「执行前」棋盘——训练端 rebuild 用记录棋盘枚举合法动作，
+  // 若用执行后棋盘（如 split 后 i 格已变 keep 值），执行前的动作会匹配不上（not_found）
+  void _recordHumanStep(Map<String, dynamic> action, List<List<int>> cellsBefore,
+      int snapTurn, String? snapPhase, int snapPoints, int snapProduce, int owner) {
     humanSteps.add({
-      'cells': game.cells.map((c) => [c.v, c.o ?? -1, c.bridge ? 1 : 0, c.onBridge ? 1 : 0, c.auto ? 1 : 0]).toList(),
+      'cells': cellsBefore,
       'turn': snapTurn,
       'phase': snapPhase,
       'points': snapPoints,
@@ -118,6 +120,10 @@ class LocalAimSocket extends AIMSocket {
       final rec = recordMode && (duoMode || game.turn == humanSide);
       final snapTurn = game.turn, snapPhase = game.phase;
       final snapPoints = game.points, snapProduce = game.produceLeft;
+      // 执行前棋盘快照（训练端 rebuild 需要操作前状态来枚举合法动作）
+      final cellsBefore = rec
+          ? game.cells.map((c) => [c.v, c.o ?? -1, c.bridge ? 1 : 0, c.onBridge ? 1 : 0, c.auto ? 1 : 0]).toList()
+          : null;
       // endTurn 延后滚木（deferRoll），由 roll_step 逐步驱动——规则算一步，动画播一步
       final res = game.applyAction(game.turn, action, deferRoll: true);
       if (res['ok'] != true) {
@@ -125,7 +131,7 @@ class LocalAimSocket extends AIMSocket {
         return;
       }
       if (rec) {
-        _recordHumanStep(action, snapTurn, snapPhase, snapPoints, snapProduce, snapTurn);
+        _recordHumanStep(action, cellsBefore!, snapTurn, snapPhase, snapPoints, snapProduce, snapTurn);
       }
       if (res['repeatWarn'] == true) {
         // 第 2 次重复：提示「再重复一次将判负」

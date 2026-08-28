@@ -1,9 +1,9 @@
 // 训练场 AI：从服务器拉取训练好的权重（MLP），推理决策
 // 无权重/加载失败 → 回退到现有 hard 启发式
 // 网络约定（与 train/train_bc.py 一致）：
-//   输入 53 维 = 8 格 × 6 特征（v/9, o0, o1, bridge, onBridge, auto）+ 5 全局（turn, phaseA, phaseP, points/10, produceLeft/8）
-//   输出 49 槽位 = 8 格 × 6 操作（move1, move2, attack, devour, split, produce）+ endTurn
-//   权重 JSON：{"version":1,"updatedAt":"...","in":53,"hidden":64,"out":49,
+//   输入 101 维 = 16 格 × 6 特征（v/9, o0, o1, bridge, onBridge, auto）+ 5 全局（turn, phaseA, phaseP, points/10, produceLeft/8）
+//   输出 193 槽位 = 16 格 × 12 操作（move1, move2, atk敌1..3, atk己1..3, dev敌, dev己, split, produce）+ endTurn
+//   权重 JSON：{"version":1,"updatedAt":"...","in":101,"hidden":128,"out":193,
 //               "w1":[flat],"b1":[...],"w2":[flat],"b2":[...],"wo":[flat],"bo":[...]}
 import 'dart:convert';
 import 'dart:math' as math;
@@ -202,13 +202,18 @@ class TrainAi {
     return out;
   }
 
-  // ── 状态编码：53 维（视角归一化——统一为「我方在左」，左右对称）──
+  // ── 状态编码：101 维（视角归一化——统一为「我方在左」，左右对称）──
   // 我方 = game.turn；若我方在右（turn==1）→ 逆序读格子，让模型看到的永远是「我方在左」的棋盘
-  // 格子数可能因插桥/吞噬变化，固定取前 8 格（与训练一致）
+  // 关键：先补零到 16 格再逆序——与训练端 rebuild（恒 16 格）布局一致，
+  // 翻转公式统一 15-i；否则真实棋盘不足 16 格时两边格子位置错位（学的东西推理用不上）
   List<double> _encode(AimGame game) {
     final me = game.turn;
     final flip = me == 1; // 我方在右 → 翻成左视角
-    final cells = (flip ? game.cells.reversed.toList() : game.cells).take(8).toList();
+    final padded = List<AimCell>.from(game.cells);
+    while (padded.length < 16) {
+      padded.add(AimCell(0));
+    }
+    final cells = (flip ? padded.reversed.toList() : padded).take(16).toList();
     final x = <double>[];
     for (final c in cells) {
       x.add(c.v / 9.0);
@@ -218,8 +223,8 @@ class TrainAi {
       x.add(c.onBridge ? 1.0 : 0.0);
       x.add(c.auto ? 1.0 : 0.0);
     }
-    while (x.length < 48) {
-      x.addAll([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]); // 格子不足 8 格补零
+    while (x.length < 96) {
+      x.addAll([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]); // 格子不足 16 格补零
     }
     x.add(0.0); // 归一化视角下我方恒为玩家0（turn）
     x.add(game.phase == 'action' ? 1.0 : 0.0);
@@ -229,14 +234,14 @@ class TrainAi {
     return x;
   }
 
-  // ── 动作 → 槽位（97，视角归一化：翻转时格子索引镜像）──
+  // ── 动作 → 槽位（193，视角归一化：翻转时格子索引镜像）──
   // 每格 12 槽：move1, move2, atk敌1..3, atk己1..3, dev敌, dev己, split, produce
   // 攻击/吞噬按「目标敌我 × 距离」细分，AI 能明确指定打谁（此前打谁随机落点→疯狂打己方）
   int? _actionSlot(Map<String, dynamic> a, bool flip, AimGame game) {
     final t = a['type'] as String?;
     var i = a['i'] is num ? (a['i'] as num).toInt() : -1;
-    if (i < 0 || i >= 8) return null;
-    if (flip) i = 7 - i; // 我方在右：棋盘镜像，格子索引翻转
+    if (i < 0 || i >= 16) return null;
+    if (flip) i = 15 - i; // 我方在右：棋盘镜像（编码恒 16 格），格子索引翻转
     switch (t) {
       case 'move':
         final steps = a['steps'] is num ? (a['steps'] as num).toInt() : 1;
@@ -258,7 +263,7 @@ class TrainAi {
       case 'produce':
         return i * 12 + 11;
       case 'endTurn':
-        return 96;
+        return 192;
       default:
         return null;
     }

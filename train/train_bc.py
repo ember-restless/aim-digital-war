@@ -3,7 +3,7 @@
 """
 AIM 行为克隆训练（模仿学习）—— 从训练场对局数据学人类走法
 - 数据：/root/aim/train_data/games.jsonl（每行一局，训练场 /api/train/upload 写入）
-- 网络：MLP 53 → 64 → 64 → 49（槽位 = 8格×6操作 + endTurn），与 client/lib/train/train_ai.dart 同构
+- 网络：MLP 101 → 128 → 128 → 193（槽位 = 16格×12操作 + endTurn），与 client/lib/train/train_ai.dart 同构
 - 输出：/root/aim/server/public/downloads/train_weights.json（version 自增，客户端拉取即生效）
 用法：python3 train_bc.py [--epochs 80] [--deploy]
 """
@@ -20,10 +20,10 @@ from rules import AimGame, AimCell
 
 DATA_FILE = '/root/aim/train_data/games.jsonl'
 WEIGHTS_FILE = '/root/aim/server/public/downloads/train_weights.json'
-OUT_SLOTS = 97   # 8格×12槽（move1, move2, atk敌1..3, atk己1..3, dev敌, dev己, split, produce）+ endTurn
-IN_DIM = 53      # 8格×6特征 + 5全局
+OUT_SLOTS = 16 * 12 + 1  # 193：16格×12槽（move1, move2, atk敌1..3, atk己1..3, dev敌, dev己, split, produce）+ endTurn
+IN_DIM = 16 * 6 + 5      # 101：16格×6特征 + 5全局
 HIDDEN = 128
-MAX_CELLS = 8
+MAX_CELLS = 16           # 2026-08-28：8→16，与游戏 limit=16 对齐（此前只编码 8 格，后半棋盘是盲区）
 
 # ── 数据加载 ──
 def load_games(path):
@@ -51,7 +51,7 @@ def rebuild(step, limit):
         cells.append(AimCell(int(v) if v is not None else 0,
                              o=None if o == -1 else (int(o) if o is not None else None),
                              bridge=bool(bridge), onBridge=bool(onBridge), auto=bool(auto)))
-    # 补足 8 格
+    # 补足 16 格（与游戏 limit=16 对齐；棋盘动态增长，记录最多 16 格）
     while len(cells) < MAX_CELLS:
         cells.append(AimCell(0))
     g.cells = cells
@@ -77,12 +77,12 @@ def normalize_view(g, owner):
     return True
 
 def action_slot(action, flip=False, game=None):
-    """动作 → 槽位（97）：每格 12 槽——
+    """动作 → 槽位（193）：每格 12 槽——
     move1, move2, atk敌1..3, atk己1..3, dev敌, dev己, split, produce
     攻击/吞噬槽位按「目标敌我 × 距离」细分，AI 能明确指定打谁（敌方优先习得）
-    注意：翻转（flip）时 i 和 j 都必须镜像——game 已被 normalize_view 镜像，
-    目标格 j 若用原始坐标，敌我判定会错位（右方「攻击敌方」被标成「攻击己方」槽，
-    导致模型在右方状态下打自己——已修复）。
+    注意：翻转（flip）时 i 和 j 都必须镜像——game 已被 normalize_view 镜像
+    且恒为 16 格（rebuild 补零），镜像公式 MAX_CELLS-1-i = 15-i 与推理端
+    （补零到 16 格后 15-i）一致，否则右方状态下敌我判定错位会导致打自己。
     """
     t = action.get('type')
     i = int(action.get('i', -1))
@@ -327,7 +327,7 @@ def main():
     if not args.fresh and os.path.exists(WEIGHTS_FILE):
         try:
             w = json.load(open(WEIGHTS_FILE, encoding='utf-8'))
-            if w.get('out') == OUT_SLOTS:
+            if w.get('out') == OUT_SLOTS and w.get('in') == IN_DIM:
                 old_hidden = int(w.get('hidden', HIDDEN))
                 init = {
                     'w1': np.array(w['w1'], dtype=np.float64).reshape(IN_DIM, old_hidden),

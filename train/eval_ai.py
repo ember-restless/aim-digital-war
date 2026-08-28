@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 Python 版模型 AI（评估用）—— 与 client/lib/train/train_ai.dart 同构
-- 加载 train_weights.json（MLP 53→64→64→49）
-- 决策：阶段选择回退启发式（AimAi hard），已选阶段后行动用模型前向 + 合法动作 mask
-- 视角归一化：我方（game.turn）恒为左方，flip 时棋盘镜像、槽位索引翻转（与训练一致）
+- 加载 train_weights.json（MLP 101→128→128→193）
+- 决策：阶段选择交给网络，已选阶段后行动用模型前向 + 合法动作 mask
+- 视角归一化：我方（game.turn）恒为左方，flip 时棋盘镜像（先补零到 16 格再逆序）、
+  槽位索引翻转（15-i，与训练端 rebuild 恒 16 格一致）
 """
 import json
 import sys
@@ -13,11 +14,12 @@ import numpy as np
 
 sys.path.insert(0, '/root/aim/pc')
 from ai import AimAi
+from rules import AimCell
 
-IN_DIM = 53
+IN_DIM = 101
 HIDDEN = 128
-OUT = 97
-MAX_CELLS = 8
+OUT = 193
+MAX_CELLS = 16
 
 
 
@@ -44,8 +46,14 @@ class ModelAi:
 
     def _encode(self, game, me):
         flip = me == 1
-        # 格子数可能因插桥/吞噬变化，固定取前 8 格（与训练一致）
-        cells = list(reversed(game.cells))[:MAX_CELLS] if flip else game.cells[:MAX_CELLS]
+        # 先补零到 16 格再逆序——与训练端 rebuild（恒 16 格）布局一致，
+        # 翻转公式统一 15-i；真实棋盘不足 16 格时格子位置才不错位
+        cells = list(game.cells)
+        while len(cells) < MAX_CELLS:
+            cells.append(AimCell(0))
+        if flip:
+            cells = list(reversed(cells))
+        cells = cells[:MAX_CELLS]
         x = []
         for c in cells:
             x += [c.v / 9.0,
@@ -88,7 +96,7 @@ class ModelAi:
         if t == 'produce':
             return i * 12 + 11
         if t == 'endTurn':
-            return 96
+            return 16 * 12
         return None
 
     def decide(self, game):
