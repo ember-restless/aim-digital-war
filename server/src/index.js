@@ -127,6 +127,10 @@ let rlProcess = null; // 自博弈 RL 进程（detached）
 let lastTrainAt = null;
 
 function triggerTrain() {
+  // 2026-08-28：纯 BC 自动训练停用——改为常驻 BC+RL 混合进程（train_hybrid.py）：
+  // 自博弈打分 + 人类数据模仿联合训练，自行定期 reload games.jsonl 增量吸收新对局。
+  // 权重由 hybrid 进程直接部署，这里若再训会造成双写冲突。
+  return;
   if (training) { pendingTrain = true; return; }
   if (lastTrainAt && Date.now() - lastTrainAt < TRAIN_MIN_GAP) { pendingTrain = true; return; }
   // 没有数据就不训
