@@ -85,6 +85,18 @@ ENTROPY_BETA = 0.02   # 熵正则系数：强制策略保持随机性，argmax �
 # 20 回合内赢 → 全额 R_WIN；之后每拖 10 回合扣 1（下限 0.5）；输仍 R_LOSE
 WIN_TURNS_OK = 20
 WIN_TURN_PENALTY = 1.0   # 每 10 回合扣分（WIN_TURN_PENALTY * 10 回合）
+# ── 终局综合打分（牢大定 2026）：不固定 ±R_WIN，按全局行为 + 最后结果综合 ──
+# 结果基础分（胜 R_WIN / 败 R_LOSE）仍主导胜负信号，行为分只调幅度：
+#   avg_delta（整局平均战力差）：碾压 → 加满；被压 → 减
+#   K/D：杀人多死得少 → 加；K/D=1 中性
+#   造兵：运营好 → 小幅加
+# 胜方最高 +1.5（碾压 6.5），最低 -1.5（侥幸翻盘 3.5）；
+# 败方 -1.0 ~ +1.0（体面败 -4，被碾压 -6）。行为分幅度封顶，防刷奖励。
+BEHAVIOR_DELTA = 15.0    # 平均战力差归一化尺度（平均领先 15 点 = 满分）
+BEHAVIOR_KD = 2.0        # K/D 归一化尺度（(kd-1)/2 后截断 ±1）
+BEHAVIOR_PROD = 12.0     # 造兵数归一化尺度（造 12 个 = 满分）
+BEHAVIOR_WIN = 1.5       # 胜方行为分上限
+BEHAVIOR_LOSE = 1.0      # 败方行为分上限
 
 
 def xavier(fan_in, fan_out, rng):
@@ -315,20 +327,23 @@ class RlPolicy:
 
 
 # ── 自博弈一局：返回 (winner, traj, devour_stat) ──
-# traj: [(x, slot, lp, r, owner)] 每步即时奖励（终局 ±R_WIN/R_LOSE 已并入最后一步）
+# traj: [(x, slot, lp, r, owner)] 每步即时奖励（终局综合分已并入最后一步）
 # devour_stat: {'enemy': n, 'self': n} 本局吞噬敌/己次数（验证修正效果）
 # record_for: 'a'=只记玩家0（左）侧轨迹；'b'=只记玩家1（右）侧；'both'=两侧都记（左右互搏）
 # 奖励设计：
 #   1. 战力差 Δ 变化（动作阶段，滚木前结算）
 #   2. 事件奖励：击杀/损失/吞噬敌/吞噬己/重复警告
 #   3. 滚木是回合间自动结算：效果记给滚木主人，挂在其下一次行动上（pending）
-#   4. 终局 ±R_WIN/R_LOSE
+#   4. 终局综合打分（牢大定）：结果基础分（胜/败）+ 全局行为修正——
+#      整局平均战力差（碾压加分/被压减分）、K/D、造兵运营，幅度封顶防刷奖励
 def play_game(policy_a, policy_b, seed=0, record_for='a'):
     g = AimGame(limit=16)
     ai_a, ai_b = policy_a, policy_b  # 玩家0=policy_a（左），玩家1=policy_b（右）
     traj = []
     pending = [0.0, 0.0]   # 滚木结算奖励，等滚木主人下一次行动时并入
     devour_stat = {'enemy': 0, 'self': 0}
+    delta_acc = [0.0, 0.0]  # 每步战力差累加（owner 视角，综合打分用）
+    delta_n = [0, 0]        # 采样步数
     guard = 0
     while g.winner is None and guard < MAX_GUARD:
         guard += 1
@@ -369,6 +384,8 @@ def play_game(policy_a, policy_b, seed=0, record_for='a'):
             slot = p.slot_of(a, flip, g)  # fallback 动作重新判定（仍在动作后，罕见）
         # ── 动作阶段奖励（滚木前，owner 视角）──
         delta1 = g.sum_of(owner) - g.sum_of(1 - owner)
+        delta_acc[owner] += delta1
+        delta_n[owner] += 1
         step_r = R_DELTA * (delta1 - delta0)
         k1, l1 = g.stats['kills'][owner], g.stats['losses'][owner]
         kd, ld = k1 - k0, l1 - l0
@@ -392,6 +409,8 @@ def play_game(policy_a, policy_b, seed=0, record_for='a'):
                     g.clear_pending_roll()
                     break
             rd1 = g.sum_of(roller) - g.sum_of(1 - roller)
+            delta_acc[roller] += rd1
+            delta_n[roller] += 1
             roll_r = R_DELTA * (rd1 - rd0)
             rk1, rl1 = g.stats['kills'][roller], g.stats['losses'][roller]
             roll_r += R_KILL * (rk1 - rk0) + R_LOSS * (rl1 - rl0)
@@ -402,15 +421,35 @@ def play_game(policy_a, policy_b, seed=0, record_for='a'):
             if slot is not None:
                 traj.append((x_before, slot, lp, step_r + pending[owner], owner))
                 pending[owner] = 0.0
-    # ── 终局奖励（并入最后一步，含未结算的滚木奖励）──
-    # 速战速决：WIN_TURNS_OK 回合内赢 → 全额 R_WIN，之后每拖 10 回合扣 1（下限 0.5）
+    # ── 终局综合打分（并入两侧各自最后一步，含未结算的滚木奖励）──
+    # 牢大定：不固定 ±R_WIN——结果基础分 + 全局行为修正（平均战力差/K/D/造兵）。
+    # 胜方：基础分（速战速决折扣）±行为分；败方：R_LOSE ±行为分（体面败少扣）。
+    # 两侧都结算：赢家 +、输家 -，各自从自己侧轨迹拿到终局信号。
     if g.winner is not None and traj:
-        x, slot, lp, rr, own = traj[-1]
-        if own == g.winner:
-            win_r = max(0.5, R_WIN - max(0, g.turn_count - WIN_TURNS_OK) / 10.0 * WIN_TURN_PENALTY)
-        else:
-            win_r = R_LOSE
-        traj[-1] = (x, slot, lp, rr + pending[own] + win_r, own)
+        for own in (0, 1):
+            idx = None
+            for i in range(len(traj) - 1, -1, -1):
+                if traj[i][4] == own:
+                    idx = i
+                    break
+            if idx is None:
+                continue
+            x, slot, lp, rr, _o = traj[idx]
+            # 全局行为（own 视角）：整局平均战力差 + K/D + 造兵运营
+            avg_delta = delta_acc[own] / delta_n[own] if delta_n[own] else 0.0
+            k = g.stats['kills'][own]
+            l = g.stats['losses'][own]
+            kd = (k / l) if l else (3.0 if k > 0 else 1.0)   # 没死 → K/D 视为优秀
+            d_score = max(-1.0, min(1.0, avg_delta / BEHAVIOR_DELTA))
+            kd_score = max(-1.0, min(1.0, (kd - 1.0) / BEHAVIOR_KD))
+            prod_score = max(0.0, min(1.0, g.stats['produce'][own] / BEHAVIOR_PROD))
+            behavior = 0.6 * d_score + 0.3 * kd_score + 0.1 * prod_score
+            if own == g.winner:
+                base = max(0.5, R_WIN - max(0, g.turn_count - WIN_TURNS_OK) / 10.0 * WIN_TURN_PENALTY)
+                final_r = base + behavior * BEHAVIOR_WIN
+            else:
+                final_r = R_LOSE + behavior * BEHAVIOR_LOSE
+            traj[idx] = (x, slot, lp, rr + pending[own] + final_r, own)
     return g.winner, traj, devour_stat
 
 
