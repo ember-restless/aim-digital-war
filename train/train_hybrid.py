@@ -383,14 +383,18 @@ def play_game(policy_a, policy_b, seed=0, record_for='a'):
         flip = owner == 1
         x_before = p.encode(g) if need_record else None
         slot = p.slot_of(a, flip, g) if need_record else None
-        # 吞噬敌/己预判（devour 只吃正前方 1 格）
+        # 吞噬/攻击敌我预判（devour 只吃正前方 1 格；attack 也可打自己人——
+        # 人类从不会打自己，但 RL 探索会踩到，奖励必须防「自残刷分」）
         devour_enemy = devour_self = False
-        if a.get('type') == 'devour':
+        hit_self = False   # attack/devour 目标是己方单位（自残）
+        if a.get('type') in ('devour', 'attack'):
             j = int(a.get('j', -1))
             if 0 <= j < len(g.cells):
                 o = g.cells[j].o
-                devour_enemy = o is not None and o != owner
-                devour_self = o == owner
+                hit_self = o == owner
+                if a.get('type') == 'devour':
+                    devour_enemy = o is not None and o != owner
+                    devour_self = o == owner
         k0, l0 = g.stats['kills'][owner], g.stats['losses'][owner]
         r = g.apply_action(owner, a, defer_roll=True)
         if not r['ok']:
@@ -416,6 +420,11 @@ def play_game(policy_a, policy_b, seed=0, record_for='a'):
         elif devour_self:
             step_r += R_DEVOUR_SELF
             devour_stat['self'] += 1
+        elif hit_self:
+            # 自残（attack 自己人）：apply_damage 会同时记 kills[自己]+1 和 losses[自己]+1，
+            # 若照常发 R_KILL×kd 会变成 +0.4-0.3=+0.1 的正收益——网络学「打自己刷分」！
+            # 只罚损失、不奖击杀（kd 归零），自残必须净亏。
+            step_r += R_LOSS * ld
         else:
             step_r += R_KILL * kd + R_LOSS * ld
         if r.get('repeatWarn'):
