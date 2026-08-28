@@ -369,7 +369,10 @@ class AimGame:
         collapsed = False
         if total <= 9:
             me.v = total
-            if t.o is not None:
+            # 吞噬自己人（合成）不记击杀/损失——kills/losses 是战斗统计，
+            # 自吞合成是运营操作，记进 stats 会污染 K/D（此前 RL 里「拆了又合」
+            # 的循环每合一次就自己杀自己一次，评估 K/D 虚高）
+            if t.o is not None and t.o != owner:
                 self._stats_list('losses')[t.o] += 1
                 self._stats_list('kills')[owner] += 1
             self.cells.pop(j)

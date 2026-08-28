@@ -60,15 +60,15 @@ HISTORY_WINDOW_GAMES = 1000  # rl_history 只保留最近 1000 局（RL 一局=�
 # ── 奖励塑形（针对 AIM 特殊性设计，非通用 RL 奖励）──
 # 胜负判据是 sum_of（双方所有单位数值总和，谁先归零谁输），核心信号是
 # 「战力差 Δ = 我方sum - 敌方sum」。
-# 牢大定 2026：每步按「全局状态」打分（不是只奖励 Δ 变化）——
-#   step_r = R_STATE * tanh(Δ/STATE_SCALE)  当前全局战力差的分（碾压→+，挨打→−）
-#          + 事件奖励（击杀/损失/吞噬/重复警告）
-#          − R_STEP_COST                     每走一步扣分：行动越多扣越多（逼高效）
-# 终局 = 结果基础分（胜/败）± 全局行为修正（平均Δ/K-D/造兵，幅度封顶防刷奖励）
-# 超9吞噬「变拉」（15→1+5=6）导致 sum 缩水，状态分自动惩罚，无需硬编码禁招。
-R_STATE = 0.5         # 每步全局状态分权重（tanh 压缩到 ±1 后乘）
-STATE_SCALE = 12.0    # 战力差归一化尺度：Δ=12 → tanh(1)≈0.76，Δ=24 → 0.96
-R_STEP_COST = 0.04    # 每走一步扣分（牢大定：25 步扣 1 分；100 步 -4，拖局重罚）
+# 牢大定 2026（v2）：删除「全局状态分」（只看当前 Δ 会让策略原地空转刷分），
+#   改为「战力线节奏奖惩」：
+#   a. 每步固定扣行动成本（25 步扣 1 分 → 现在翻倍 12.5 步扣 1 分）
+#   b. 战力线变量 a：开局 8 点，每回合 +1；
+#      我方受攻击 → a 减去受到的伤害；我方本回合 move 过 → 该回合不 +1；
+#      每回合末结算：sum < a → 扣 (a−sum)×k；sum > a → 加 (sum−a)×k
+#   ——逼策略跟上战力增长节奏：暴兵/发展超线有奖，挨打掉线有罚，移动回合豁免
+# 事件奖励（击杀/损失/吞噬/重复警告）照旧；终局综合打分照旧。
+R_STEP_COST = 0.08    # 每走一步扣分（牢大定 v2：25 步扣 1 分翻倍 → 12.5 步扣 1 分，拖局重罚）
 R_KILL = 0.4          # 击杀敌方单位（Δ 之外的事件奖励）
 R_LOSS = -0.3         # 己方单位被灭
 R_DEVOUR_ENEMY = 0.8  # 吞噬敌方（Δ 已算 2v，这里只给引导量——2.0 会让策略无脑吞）
@@ -76,6 +76,11 @@ R_DEVOUR_SELF = -0.1  # 吞噬己方（合成 8/9 是运营核心，几乎不惩
 R_REPEAT_WARN = -0.6  # 第二次重复操作警告（第三次直接判负）
 R_WIN = 5.0           # 终局胜利（主导信号）
 R_LOSE = -5.0         # 终局失败
+# ── 战力线节奏奖惩（牢大定 v2）──
+LINE_START = 8.0      # 战力线 a 起点：第一回合 8 点（开局双方 sum 各 8）
+LINE_GROW = 1.0       # 每回合 +1 点
+LINE_K = 0.03         # 系数 k：sum 与 a 每差 1 点 ±0.03 分（可调，别太大压过胜负信号）
+# 注意：移动操作该回合豁免增长（move 是去干事，不是发育）；挨打按伤害量降线。
 DEVOUR_PRIOR = 1.5    # 吞敌槽探索先验（logit 偏置，仅训练期引导，参与更新可被拉回）
 EPS = 0.05            # ε 均匀探索基础值（固定：稀有合法动作也有公平机会被尝试）
 # ── 自适应探索（牢大定 2026）：互搏失败率驱动噪点，左右独立 ──
@@ -140,14 +145,14 @@ class RlPolicy:
             self.wo = np.array(w['wo'], dtype=np.float64).reshape(self.out, self.hidden)
             self.bo = np.array(w['bo'], dtype=np.float64)
             # 吞敌先验：BC 权重里吞敌槽 logit 天生偏低（人类数据吞敌少），
-            # 给 8 个格子的「devour 敌」槽（i*12+8）加探索偏置，让 AI 敢于尝试吞敌。
-            # 这只是探索引导，不是硬编码——学成什么样完全由奖励塑形决定，
+            # 给 8 个格子的「devour 敌」槽（新 305 布局：i*19+8）加探索偏置，
+            # 让 AI 敢于尝试吞敌。这只是探索引导，不是硬编码——学成什么样完全由奖励塑形决定，
             # 若吞敌真不好，梯度会把这个偏置拉回去（bo 参与更新）。
             # 注意：RL 存档（rl: True）的 bo 已含先验（训练期加过且参与更新），
             # 重新加载（从存档继续训练）时再加会双倍，必须跳过。
             if not w.get('rl'):
                 for i in range(MAX_CELLS):
-                    self.bo[i * 12 + 8] += DEVOUR_PRIOR
+                    self.bo[i * 19 + 8] += DEVOUR_PRIOR
             # 价值头：BC 权重没有 → 新初始化
             if 'wv' in w:
                 self.wv = np.array(w['wv'], dtype=np.float64).reshape(1, self.hidden)
@@ -351,21 +356,26 @@ class RlPolicy:
 # traj: [(x, slot, lp, r, owner)] 每步即时奖励（终局综合分已并入最后一步）
 # devour_stat: {'enemy': n, 'self': n} 本局吞噬敌/己次数（验证修正效果）
 # record_for: 'a'=只记玩家0（左）侧轨迹；'b'=只记玩家1（右）侧；'both'=两侧都记（左右互搏）
-# 奖励设计（牢大定 2026）：
-#   1. 每步按全局状态打分：R_STATE * tanh(Δ/STATE_SCALE)，Δ=动作后我方战力差——
-#      碾压局面每步拿正分，挨打局面每步拿负分（不是只奖励变化量）
+# 奖励设计（牢大定 2026 v2）：
+#   1. 每步固定扣 R_STEP_COST：行动越多扣越多，逼策略高效不磨蹭
 #   2. 事件奖励：击杀/损失/吞噬敌/吞噬己/重复警告
-#   3. 每走一步扣 R_STEP_COST：行动越多扣越多，逼策略高效不磨蹭
-#   4. 滚木回合间自动结算：按滚木后全局状态给分，挂在其下一次行动上（pending），不扣步数
+#   3. 战力线节奏奖惩：a 开局 8，每回合 +1；受攻击按伤害降线；本回合 move 过不涨线；
+#      每回合末结算 (sum−a)×k，超线加分、掉线扣分（挂 pending 并入下一次行动）
+#   4. 滚木回合间自动结算：击杀/损失事件奖励照旧，挂在其下一次行动上（pending），不扣步数
 #   5. 终局综合打分：结果基础分（胜/败）+ 全局行为修正（平均战力差/K/D/造兵）
 def play_game(policy_a, policy_b, seed=0, record_for='a'):
     g = AimGame(limit=16)
     ai_a, ai_b = policy_a, policy_b  # 玩家0=policy_a（左），玩家1=policy_b（右）
     traj = []
-    pending = [0.0, 0.0]   # 滚木结算奖励，等滚木主人下一次行动时并入
+    pending = [0.0, 0.0]   # 滚木/战力线结算奖励，等对应方下一次行动时并入
     devour_stat = {'enemy': 0, 'self': 0}
     delta_acc = [0.0, 0.0]  # 每步战力差累加（owner 视角，综合打分用）
     delta_n = [0, 0]        # 采样步数
+    # ── 战力线（牢大定 v2）：开局 8，每回合 +1，受攻击降线，move 回合不涨 ──
+    line = [LINE_START, LINE_START]
+    line_moved = [False, False]   # 本回合是否 move 过
+    line_damage = [0.0, 0.0]      # 本回合受到的攻击伤害（按 sum 减少量计）
+    last_turn_count = 0
     guard = 0
     while g.winner is None and guard < MAX_GUARD:
         guard += 1
@@ -395,7 +405,12 @@ def play_game(policy_a, policy_b, seed=0, record_for='a'):
                 if a.get('type') == 'devour':
                     devour_enemy = o is not None and o != owner
                     devour_self = o == owner
+        # 本回合我方是否移动（战力线豁免用）
+        if a.get('type') == 'move':
+            line_moved[owner] = True
         k0, l0 = g.stats['kills'][owner], g.stats['losses'][owner]
+        # 动作前双方 sum（受攻击量 = 对方行动后我方 sum 的减少量，按攻击方视角计）
+        sum_before = [g.sum_of(0), g.sum_of(1)]
         r = g.apply_action(owner, a, defer_roll=True)
         if not r['ok']:
             acts = g.get_legal_actions(owner)
@@ -407,11 +422,11 @@ def play_game(policy_a, policy_b, seed=0, record_for='a'):
             a, lp = acts[0], 0.0
             slot = p.slot_of(a, flip, g)  # fallback 动作重新判定（仍在动作后，罕见）
         # ── 动作阶段奖励（滚木前，owner 视角）──
-        # 牢大定：每步按全局状态打分（tanh 压缩战力差）+ 事件奖励 − 行动成本
+        # 牢大定 v2：删除全局状态分（空转刷分根源）——每步 = 事件奖励 − 行动成本
         delta1 = g.sum_of(owner) - g.sum_of(1 - owner)
         delta_acc[owner] += delta1
         delta_n[owner] += 1
-        step_r = R_STATE * np.tanh(delta1 / STATE_SCALE) - R_STEP_COST
+        step_r = -R_STEP_COST
         k1, l1 = g.stats['kills'][owner], g.stats['losses'][owner]
         kd, ld = k1 - k0, l1 - l0
         if devour_enemy:
@@ -429,6 +444,9 @@ def play_game(policy_a, policy_b, seed=0, record_for='a'):
             step_r += R_KILL * kd + R_LOSS * ld
         if r.get('repeatWarn'):
             step_r += R_REPEAT_WARN
+        # 受攻击量：对方行动（本步 owner 行动）后，对方视角下我方的 sum 减少 = 攻击伤害
+        # （我方 sum_before[1-owner] 减去当前 sum[1-owner]，正值计入战力线降线）
+        # 注意：滚木结算也可能造成伤害，放在滚木段后统一计
         # ── 滚木阶段：自动结算，效果记给滚木主人（= 当前 g.turn）──
         if g.has_pending_roll:
             roller = g.turn
@@ -440,17 +458,36 @@ def play_game(policy_a, policy_b, seed=0, record_for='a'):
             rd1 = g.sum_of(roller) - g.sum_of(1 - roller)
             delta_acc[roller] += rd1
             delta_n[roller] += 1
-            # 滚木结算：按全局状态打分（不扣步数——不是行动），事件奖励照旧
-            roll_r = R_STATE * np.tanh(rd1 / STATE_SCALE)
-            rk1, rl1 = g.stats['kills'][roller], g.stats['losses'][roller]
-            roll_r += R_KILL * (rk1 - rk0) + R_LOSS * (rl1 - rl0)
+            # 滚木结算：事件奖励照旧（不扣步数——不是行动），战力线伤害随后统一计
+            roll_r = R_KILL * (g.stats['kills'][roller] - rk0) + R_LOSS * (g.stats['losses'][roller] - rl0)
             pending[roller] += roll_r
+        # 战力线受攻击统计（动作 + 滚木后统一结算）
+        # 只计「非行动方」的 sum 减少 = 本步行动/滚木对敌方造成的伤害（被攻击方降线）；
+        # 行动方自己的损失（如走桥塌人亡、自残）不算「受攻击」，已有事件惩罚兜底
+        opp = 1 - owner
+        hurt = sum_before[opp] - g.sum_of(opp)
+        if hurt > 0:
+            line_damage[opp] += hurt
         # 记录模型侧轨迹（动作前状态 x_before + 动作前槽位，与 BC 数据/评估一致）
         # lp=None = ε 探索步（off-policy），不参与学习
         if need_record:
             if slot is not None:
                 traj.append((x_before, slot, lp, step_r + pending[owner], owner))
                 pending[owner] = 0.0
+        # ── 回合末：战力线节奏结算（turn_count 每回合 +1）──
+        # 结算时机：本步是 endTurn（turn_count 已 +1，轮到对方）。双方都结算：
+        #   a 更新 = 上一回合的 a + 1（本回合 move 过则不涨）− 受攻击伤害
+        #   分 = (sum − a) × k，挂 pending 等该方下一次行动并入
+        if g.turn_count > last_turn_count:
+            for s in (0, 1):
+                if not line_moved[s]:
+                    line[s] += LINE_GROW
+                line[s] -= line_damage[s]
+                line_r = (g.sum_of(s) - line[s]) * LINE_K
+                pending[s] += line_r
+                line_moved[s] = False
+                line_damage[s] = 0.0
+            last_turn_count = g.turn_count
     # ── 终局综合打分（并入两侧各自最后一步，含未结算的滚木奖励）──
     # 牢大定：不固定 ±R_WIN——结果基础分 + 全局行为修正（平均战力差/K/D/造兵）。
     # 胜方：基础分（速战速决折扣）±行为分；败方：R_LOSE ±行为分（体面败少扣）。
