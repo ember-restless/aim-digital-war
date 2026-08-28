@@ -303,6 +303,7 @@ def main():
     ap.add_argument('--extra-data', default='',
                     help='附加训练数据文件（jsonl，如规则 AI 合成对局），与人类数据合并训练')
     ap.add_argument('--deploy', action='store_true', help='训练完写权重到下载目录（客户端拉取生效）')
+    ap.add_argument('--force', action='store_true', help='样本不足 150 也强制训练部署（手动验证用）')
     args = ap.parse_args()
 
     games = load_games(DATA_FILE)
@@ -319,6 +320,11 @@ def main():
         print(f'无有效样本（{stats}）')
         return
     print(f'样本数: {len(X)}  （{stats}）')
+    # 样本太少不部署：避免几局就触发训练导致权重反复横跳（193 槽大网络需要足量样本）
+    # 手动训练可用 --force 绕过
+    if len(X) < 150 and not args.force:
+        print(f'有效样本仅 {len(X)} < 150，暂不部署（保留现有权重）；继续攒局，凑够再训')
+        return
     print('开始训练 MLP ...')
     t0 = time.time()
     # warm start：从现有权重继续（RL 部署后不会被从零训练覆盖，平滑演进）
