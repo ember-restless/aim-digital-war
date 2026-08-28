@@ -61,7 +61,7 @@ HISTORY_WINDOW_GAMES = 1000  # rl_history 只保留最近 1000 局（RL 一局=�
 # 超9吞噬「变拉」（15→1+5=6）导致 sum 缩水，状态分自动惩罚，无需硬编码禁招。
 R_STATE = 0.5         # 每步全局状态分权重（tanh 压缩到 ±1 后乘）
 STATE_SCALE = 12.0    # 战力差归一化尺度：Δ=12 → tanh(1)≈0.76，Δ=24 → 0.96
-R_STEP_COST = 0.02    # 每走一步扣分（行动成本：100 步 -2，200 步 -4，配合速战折扣双罚拖局）
+R_STEP_COST = 0.04    # 每走一步扣分（牢大定：25 步扣 1 分；100 步 -4，拖局重罚）
 R_KILL = 0.4          # 击杀敌方单位（Δ 之外的事件奖励）
 R_LOSS = -0.3         # 己方单位被灭
 R_DEVOUR_ENEMY = 0.8  # 吞噬敌方（Δ 已算 2v，这里只给引导量——2.0 会让策略无脑吞）
@@ -85,10 +85,10 @@ FAIL_LOW = 0.2        # 失败率 ≤20%（胜率 ≥80%）→ 一直赢 → 加
 FAIL_HIGH = 0.5       # 失败率 ≥50% → 输麻了 → 温度回落收敛
 ENTROPY_BETA = 0.02   # 熵正则系数：强制策略保持随机性，argmax 不早熟固化——
                       # 否则 PPO 只强化当前最优动作，argmax 永不翻转（实测 15000 局只变 1%）
-# ── 速战速决奖励（牢大定）：对齐评估「速战速决」指标 ──
-# 20 回合内赢 → 全额 R_WIN；之后每拖 10 回合扣 1（下限 0.5）；输仍 R_LOSE
-WIN_TURNS_OK = 20
-WIN_TURN_PENALTY = 1.0   # 每 10 回合扣分（WIN_TURN_PENALTY * 10 回合）
+# ── 速战速决奖励（牢大定 2026）：统一 25 步/回合扣 1 分，训练评估同节奏 ──
+# 25 回合内赢 → 全额 R_WIN；之后每拖 25 回合扣 1（下限 0.5）；输仍 R_LOSE
+WIN_TURNS_OK = 25
+WIN_TURN_PENALTY = 1.0   # 每 25 回合扣 1 分（WIN_TURN_PENALTY * 25 回合）
 # ── 终局综合打分（牢大定 2026）：不固定 ±R_WIN，按全局行为 + 最后结果综合 ──
 # 结果基础分（胜 R_WIN / 败 R_LOSE）仍主导胜负信号，行为分只调幅度：
 #   avg_delta（整局平均战力差）：碾压 → 加满；被压 → 减
@@ -449,7 +449,7 @@ def play_game(policy_a, policy_b, seed=0, record_for='a'):
             prod_score = max(0.0, min(1.0, g.stats['produce'][own] / BEHAVIOR_PROD))
             behavior = 0.6 * d_score + 0.3 * kd_score + 0.1 * prod_score
             if own == g.winner:
-                base = max(0.5, R_WIN - max(0, g.turn_count - WIN_TURNS_OK) / 10.0 * WIN_TURN_PENALTY)
+                base = max(0.5, R_WIN - max(0, g.turn_count - WIN_TURNS_OK) / 25.0 * WIN_TURN_PENALTY)
                 final_r = base + behavior * BEHAVIOR_WIN
             else:
                 final_r = R_LOSE + behavior * BEHAVIOR_LOSE

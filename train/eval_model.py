@@ -83,8 +83,8 @@ def compute_score(duel_rate, bench, gs):
     add('dev', '运营·发展上限', min(5, 1 + max(0, gs['maxDigit'] - 5)), 5,
         f'单局最高数字 {gs["maxDigit"]}', '达到 9 满分 5；8 得 4；7 得 3；6 得 2')
     wt = gs.get('avgWinTurns', 0)
-    add('spd', '运营·速战速决', max(0, 5 - max(0, wt - 20) / 5), 5,
-        f'获胜局平均回合 {wt}', '≤20 回合满分 5；每多 5 回合扣 1 分')
+    add('spd', '运营·速战速决', max(0, 5 - max(0, wt - 25) / 25), 5,
+        f'获胜局平均回合 {wt}', '≤25 回合满分 5；每多 25 回合扣 1 分')
 
     total = round(sum(i['score'] for i in items), 1)
     grade = 'S' if total >= 90 else 'A' if total >= 75 else 'B' if total >= 60 else 'C' if total >= 45 else 'D'
