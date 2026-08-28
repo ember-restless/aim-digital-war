@@ -25,7 +25,7 @@ MAX_CELLS = 16
 
 
 class ModelAi:
-    def __init__(self, weights_path, fallback_level='hard', seed=0):
+    def __init__(self, weights_path, fallback_level='hard', seed=0, sample=False, temp=1.0):
         w = json.load(open(weights_path, 'r', encoding='utf-8'))
         # 维度从权重文件读取（64/128 单元都兼容）
         self.in_dim = int(w.get('in', IN_DIM))
@@ -38,11 +38,44 @@ class ModelAi:
         self.wo = np.array(w['wo'], dtype=np.float64).reshape(self.out, self.hidden)
         self.bo = np.array(w['bo'], dtype=np.float64)
         self.fallback = AimAi(fallback_level, seed=seed)
+        # 采样模式（互搏评估用，与训练采样口径一致）；temp 从权重恢复（左右独立噪点）
+        self.sample = sample
+        self.temp = temp
+        if sample and 'temp' in w:
+            try:
+                self.temp = float(w['temp'])
+            except Exception:
+                pass
+        self.rng = np.random.default_rng(seed + 101)
 
     def _forward(self, x):
         h1 = np.maximum(0, x @ self.w1.T + self.b1)
         h2 = np.maximum(0, h1 @ self.w2.T + self.b2)
         return h2 @ self.wo.T + self.bo
+
+    def _pick(self, logits, acts, flip, game):
+        """argmax（默认）或 softmax 温度采样（sample=True，评估互搏用）"""
+        best, best_a = -1e18, None
+        kept = []
+        logit_list = []
+        for a in acts:
+            slot = self._slot(a, flip, game)
+            if slot is None or slot >= self.out:
+                continue
+            s = logits[slot]
+            kept.append(a)
+            logit_list.append(s)
+            if s > best:
+                best, best_a = s, a
+        if not kept:
+            return acts[0] if acts else None
+        if self.sample:
+            ls = np.array(logit_list, dtype=np.float64)
+            e = np.exp((ls - ls.max()) / self.temp)
+            p = e / e.sum()
+            idx = int(self.rng.choice(len(kept), p=p))
+            return kept[idx]
+        return best_a if best_a is not None else kept[0]
 
     def _encode(self, game, me):
         flip = me == 1
@@ -122,15 +155,7 @@ class ModelAi:
             logits = self._forward(x)
             if logits is None:
                 return self.fallback.decide(game)
-            best, best_a = -1e18, None
-            for a in acts:
-                slot = self._slot(a, flip, game)
-                if slot is None or slot >= self.out:
-                    continue
-                s = logits[slot]
-                if s > best:
-                    best, best_a = s, a
-            return best_a if best_a is not None else acts[0]
+            return self._pick(logits, acts, flip, game)
         acts = game.get_legal_actions(game.turn)
         playable = [a for a in acts if a['type'] != 'endTurn']
         if not playable:
@@ -139,12 +164,4 @@ class ModelAi:
         flip = me == 1
         x = self._encode(game, me)
         logits = self._forward(x)
-        best, best_a = -1e18, None
-        for a in playable:
-            slot = self._slot(a, flip, game)
-            if slot is None or slot >= self.out:
-                continue
-            s = logits[slot]
-            if s > best:
-                best, best_a = s, a
-        return best_a if best_a is not None else playable[0]
+        return self._pick(logits, playable, flip, game)

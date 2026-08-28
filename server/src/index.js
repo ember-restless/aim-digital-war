@@ -77,6 +77,7 @@ function trainStats() {
   }
   let games = 0, steps = 0;
   let aiGames = 0, aiWins = 0;
+  let aiGamesL = 0, aiWinsL = 0, aiGamesR = 0, aiWinsR = 0; // 左右策略各自的战绩（AI 执左=人类打右）
   const pvpSeries = []; // 与真人对局序列：{n, aiWin}（n=局序，aiWin=AI 是否获胜）
   const gameTs = [];    // 每局时间戳（数据量趋势用，最多 500 条防 payload 膨胀）
   const dataFile = path.join(__dirname, '..', '..', 'train_data', 'games.jsonl');
@@ -92,10 +93,10 @@ function trainStats() {
           const g = JSON.parse(l);
           steps += (g.steps || []).length;
           if (g.ts) {
-            gameTs.push(g.ts);
+            gameTs.push({ ts: g.ts, side: humanSide });
             if (gameTs.length > 500) gameTs.shift();
           }
-          // 从第一步的人类 owner 推断人类所在侧，算 AI 胜负
+          // 从第一步的人类 owner 推断人类所在侧，算 AI 胜负（side 供监视台左右分离）
           const st = g.steps || [];
           const humanSide = st.length ? (st[0].owner ?? -1) : -1;
           // 只统计「人类 vs AI」对局（训练场单人/本地记录）：联机/双人真人对局 vsAi=false，不算 AI 胜率
@@ -104,7 +105,10 @@ function trainStats() {
             const aiWin = (humanSide === 0 && g.winner === 1) || (humanSide === 1 && g.winner === 0);
             aiGames++;
             if (aiWin) aiWins++;
-            pvpSeries.push({ n: seq, aiWin: aiWin ? 1 : 0 });
+            pvpSeries.push({ n: seq, aiWin: aiWin ? 1 : 0, side: humanSide });
+            // 左右各自的 AI 胜率（人类打左 → AI 执右 → 记右策略战绩；反之记左策略）
+            if (humanSide === 0) { aiGamesR++; if (aiWin) aiWinsR++; }
+            else { aiGamesL++; if (aiWin) aiWinsL++; }
           }
         } catch (_) {}
       }
@@ -121,6 +125,9 @@ function trainStats() {
     // 与真人对局：AI 场次/胜场/胜率 + 每局序列（折线图）
     aiGames, aiWins,
     aiWinRate: aiGames ? Math.round((aiWins / aiGames) * 1000) / 1000 : 0,
+    // 左右各自战绩：aiGamesL/aiWinsL = AI 执左（人类打右）；aiGamesR/aiWinsR = AI 执右（人类打左）
+    aiL: { games: aiGamesL, wins: aiWinsL, rate: aiGamesL ? Math.round((aiWinsL / aiGamesL) * 1000) / 1000 : 0 },
+    aiR: { games: aiGamesR, wins: aiWinsR, rate: aiGamesR ? Math.round((aiWinsR / aiGamesR) * 1000) / 1000 : 0 },
     pvpSeries,
     // 数据量趋势：最近对局时间戳（原始字符串，monitor 自己聚合）
     gameTs,
@@ -171,7 +178,7 @@ function triggerTrain() {
   });
 }
 
-// 模型实力评估：vs easy/normal/hard 各打几局（左右两侧），结果落盘 eval_result.json
+// 模型实力评估：左右互搏 + 能力考试（牢大定：vs easy/normal/hard 胜率不算指标），结果落盘 eval_result.json
 function triggerEval() {
   if (evaluating) return;
   // 左右独立权重：至少一侧存在才评（eval_model.py 双权重读取，缺侧回退）
@@ -182,7 +189,7 @@ function triggerEval() {
   const out = fs.openSync(logPath, 'a');
   const started = Date.now();
   fs.writeSync(out, `\n===== 模型评估 ${new Date().toISOString()} =====\n`);
-  const p = spawn('python3', ['/root/aim/train/eval_model.py', '--games', 'easy=4,normal=4,hard=8'],
+  const p = spawn('python3', ['/root/aim/train/eval_model.py', '--duel', '12'],
     { cwd: '/root/aim', stdio: ['ignore', out, out] });
   p.on('close', (code) => {
     try { fs.closeSync(out); } catch (_) {}

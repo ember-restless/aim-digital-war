@@ -67,14 +67,18 @@ R_WIN = 5.0           # 终局胜利（主导信号）
 R_LOSE = -5.0         # 终局失败
 DEVOUR_PRIOR = 1.5    # 吞敌槽探索先验（logit 偏置，仅训练期引导，参与更新可被拉回）
 EPS = 0.05            # ε 均匀探索基础值（固定：稀有合法动作也有公平机会被尝试）
-# ── 自适应探索（牢大定）：分数长时间无突破 → 提高噪点激发新行为 ──
+# ── 自适应探索（牢大定 2026）：互搏失败率驱动噪点，左右独立 ──
+# 指标 = 纯各项测试 + 双方对决成功率（互搏）；规则 AI 胜率不算数。
 # 噪点用 temperature（softmax 温度）：概率变平但保持相对偏好，比 ε 均匀随机平滑——
 # ε 提到 0.30 会让 30% 的步完全随机，训练数据被污染，自博弈胜率反而掉（实测 50%→44%）。
-PLATEAU_WINDOW = 5    # 用最近 N 次评估判定平台期
-PLATEAU_DELTA = 2.5   # 窗口内分数波动 < 此值 → 平台期（16 局评估噪声约 ±2，留余量）
+# 核心规则：某侧互搏失败率一直很低（一直赢）→ 该侧尝试更激进的噪点随机，
+# 走出舒适区（避免自博弈里赢家固化打法，给输家追赶空间）。
 TEMP_BASE = 1.0       # 采样温度基础值
-TEMP_STEP = 0.3       # 每持续一个平台档，温度 +0.3
-TEMP_MAX = 2.5        # 温度封顶
+TEMP_STEP = 0.3       # 每触发一次加噪点，温度 +0.3
+TEMP_MAX = 2.5        # 温度封顶（太激进会变成随机乱打）
+DUEL_WINDOW = 40      # 互搏失败率滑动窗口（最近 N 局互搏）
+FAIL_LOW = 0.2        # 失败率 ≤20%（胜率 ≥80%）→ 一直赢 → 加噪点
+FAIL_HIGH = 0.5       # 失败率 ≥50% → 输麻了 → 温度回落收敛
 ENTROPY_BETA = 0.02   # 熵正则系数：强制策略保持随机性，argmax 不早熟固化——
                       # 否则 PPO 只强化当前最优动作，argmax 永不翻转（实测 15000 局只变 1%）
 # ── 速战速决奖励（牢大定）：对齐评估「速战速决」指标 ──
@@ -100,6 +104,12 @@ class RlPolicy:
             self.in_dim = int(w.get('in', IN_DIM))
             self.hidden = int(w.get('hidden', HIDDEN))
             self.out = int(w.get('out', OUT))
+            # 恢复各自温度（左右独立噪点，重启后延续探索状态）
+            if 'temp' in w:
+                try:
+                    self.temp = float(w['temp'])
+                except Exception:
+                    pass
             self.w1 = np.array(w['w1'], dtype=np.float64).reshape(self.hidden, self.in_dim)
             self.b1 = np.array(w['b1'], dtype=np.float64)
             self.w2 = np.array(w['w2'], dtype=np.float64).reshape(self.hidden, self.hidden)
@@ -524,18 +534,18 @@ def update(policy, batch, bc=None, lr=LR, epochs=PPO_EPOCHS, clip=PPO_CLIP, bc_b
     return float(loss_p + loss_v)
 
 
-# ── 评估：完整测试（对局 + 能力考试 + 综合评分 0-100）──
-# 规格与 triggerEval/monitor 统一（easy=4,normal=4,hard=8 = 16 局）：
-# 8 局评估噪声太大（vsHard 4 局赢 1 局=12% 与赢 3 局=38% 同权重可复现），
-# 之前 RL 训练内 58 分 vs 部署评估 48 分的 10 分差就是规格不一致导致的。
-EVAL_SPEC = 'easy=4,normal=4,hard=8'
+# ── 评估：完整测试（互搏对局 + 能力考试 + 综合评分 0-100）──
+# 牢大定：vs easy/normal/hard 胜率不算指标（规则 AI 没参考价值），
+# 指标 = 纯各项测试（能力考试）+ 双方对决成功率（左右互搏）。
+DUEL_GAMES = 16       # 评估互搏局数（左右各执一侧，双方对决成功率）
 
 def eval_model_score(left_policy, right_policy):
-    """保存双策略到临时权重，跑完整评估（side=0 用左策略、side=1 用右策略）"""
+    """保存双策略到临时权重，跑完整评估（互搏 + 能力考试）。
+    结果落盘 eval_result.json（monitor 模型实力测试/考试面板实时数据源）"""
     left_policy.save(EVAL_TMP_L, version=0)
     right_policy.save(EVAL_TMP_R, version=0)
     from eval_model import run_eval
-    data = run_eval(EVAL_TMP_L, EVAL_TMP_R, EVAL_SPEC)
+    data = run_eval(EVAL_TMP_L, EVAL_TMP_R, DUEL_GAMES, out_path=EVAL_FILE)
     if not data:
         return None, None
     sc = data['score']
@@ -587,11 +597,13 @@ def next_version(path):
 
 
 def base_win_rate():
-    """原模型（BC 基础）能力：eval_result.json 的 vs hard 胜率"""
+    """原模型（BC 基础）能力：eval_result.json 的互搏胜率（左+右）/2"""
     try:
         if os.path.exists(EVAL_FILE):
             ev = json.load(open(EVAL_FILE, encoding='utf-8'))
-            return ev.get('summary', {}).get('vsHard')
+            d = ev.get('duel')
+            if d:
+                return round((d.get('leftRate', 0) + d.get('rightRate', 0)) / 2, 2)
     except Exception:
         pass
     return None
@@ -677,9 +689,8 @@ def main():
     batch_left, batch_right = [], []
     bc_pool = load_human_data()   # 人类样本池（按 side 分流），数据不足时 None
     devour_total = [0, 0]   # [吞敌, 吞己] 累计（验证吞噬修正效果）
-    wins_left = wins_right = 0   # 自博弈左右各自胜局数
-    score_window = []       # 最近 N 次评估分数（平台期检测）
-    plateau_count = 0       # 平台期持续档位（探索率据此提升）
+    duel_wins = [0, 0]      # 互搏局胜场（只算左右互搏，规则 AI 局不算——牢大：指标=双方对决成功率）
+    duel_results = []       # 最近互搏局 winner 序列（滑动窗口，动态噪点用）
     t0 = time.time()
     base_wr = base_win_rate()  # 原模型 vs hard 胜率（保留参考）
     base_score = None
@@ -687,14 +698,14 @@ def main():
     try:
         from eval_model import run_eval
         if os.path.exists(BC_WEIGHTS_LEFT) or os.path.exists(BC_WEIGHTS_RIGHT):
-            data = run_eval(BC_WEIGHTS_LEFT, BC_WEIGHTS_RIGHT, EVAL_SPEC)
+            data = run_eval(BC_WEIGHTS_LEFT, BC_WEIGHTS_RIGHT, DUEL_GAMES)
             if data:
                 base_score = data['score']['total']
-                base_wr = data['summary'].get('vsHard')
-                print(f'实时基准评估: 起点综合分 {base_score}（{data["score"]["grade"]}） vsHard {base_wr}', flush=True)
+                base_wr = data['duel'].get('leftRate')
+                print(f'实时基准评估: 起点综合分 {base_score}（{data["score"]["grade"]}） 互搏左胜率 {base_wr}', flush=True)
     except Exception as e:
         print(f'实时基准评估失败（跳过）: {e}', flush=True)
-    print(f'原模型 vs hard 基准胜率: {base_wr}  综合评分: {base_score}', flush=True)
+    print(f'原模型互搏胜率基准: {base_wr}  综合评分: {base_score}', flush=True)
     if bc_pool is not None:
         print(f'人类模仿样本: 左 {bc_count(bc_pool, "left")} 条 / 右 {bc_count(bc_pool, "right")} 条（β={BC_BETA}，每 {BC_RELOAD_EVERY} 局刷新）', flush=True)
     else:
@@ -715,7 +726,8 @@ def main():
                                      'avgReward': round(float(np.mean(rewards_r[-50:])) if rewards_r else 0, 3),
                                      'temp': right_policy.temp})
             write_status({'state': 'stopped', 'games': total_games, 'baseWinRate': base_wr,
-                          'leftVersion': lv, 'rightVersion': rv, 'temp': left_policy.temp,
+                          'leftVersion': lv, 'rightVersion': rv,
+                          'leftTemp': left_policy.temp, 'rightTemp': right_policy.temp,
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
             return
         # ── 一局自博弈 ──
@@ -731,13 +743,18 @@ def main():
             winner, traj, dev = play_game(left_policy, rule, seed=total_games, record_for='a')
         else:
             winner, traj, dev = play_game(left_policy, right_policy, seed=total_games, record_for='both')
+            # 互搏局战绩（双方对决成功率 = 牢大定的核心指标）
+            if winner == 0:
+                duel_wins[0] += 1
+            elif winner == 1:
+                duel_wins[1] += 1
+            if winner is not None:
+                duel_results.append(winner)
+                if len(duel_results) > DUEL_WINDOW:
+                    duel_results.pop(0)
         total_games += 1
         devour_total[0] += dev['enemy']
         devour_total[1] += dev['self']
-        if winner == 0:
-            wins_left += 1
-        elif winner == 1:
-            wins_right += 1
         # 达到目标局数 → 自动停止（优雅保存）；目标按「本轮局数」判定（从存档继续时累计不误触）
         if target_games > 0 and (total_games - start_games) >= target_games:
             score, grade = eval_model_score(left_policy, right_policy)
@@ -756,8 +773,9 @@ def main():
             write_status({'state': 'stopped', 'games': total_games, 'avgReward': round(avg, 3),
                           'score': score, 'grade': grade, 'baseWinRate': base_wr, 'baseScore': base_score,
                           'leftVersion': lv, 'rightVersion': rv, 'targetGames': target_games,
-                          'temp': left_policy.temp, 'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
-            print(f'目标局数 {target_games} 达成，自动停止。综合分 {score}（{grade}） 温度{left_policy.temp:.2f}', flush=True)
+                          'leftTemp': left_policy.temp, 'rightTemp': right_policy.temp,
+                          'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
+            print(f'目标局数 {target_games} 达成，自动停止。综合分 {score}（{grade}） 温度 L{left_policy.temp:.2f}/R{right_policy.temp:.2f}', flush=True)
             return
         # 每步即时奖励 → 折现 return-to-go（按侧分账，并入各自 batch）
         if traj:
@@ -800,35 +818,46 @@ def main():
                 dr = decision_diff(right_policy, base_ref_right)
                 print(f'  行为诊断: 左策略 diff {dl:.1f}% / 右策略 diff {dr:.1f}%（vs base）', flush=True)
             sp = round_games
-            print(f'[{total_games}局] 均奖 L {float(np.mean(rewards_l[-50:])) if rewards_l else 0:.2f} / R {float(np.mean(rewards_r[-50:])) if rewards_r else 0:.2f} 综合分 {score}（{grade}） 温度{left_policy.temp:.2f} 吞敌{devour_total[0]} 吞己{devour_total[1]} 互搏胜率 L{wins_left/max(1, sp)*100:.0f}% R{wins_right/max(1, sp)*100:.0f}% 耗时{(time.time()-t0)/60:.1f}m', flush=True)
+            duel_total = duel_wins[0] + duel_wins[1]
+            print(f'[{total_games}局] 均奖 L {float(np.mean(rewards_l[-50:])) if rewards_l else 0:.2f} / R {float(np.mean(rewards_r[-50:])) if rewards_r else 0:.2f} '
+                  f'综合分 {score}（{grade}） 温度 L{left_policy.temp:.2f}/R{right_policy.temp:.2f} '
+                  f'吞敌{devour_total[0]} 吞己{devour_total[1]} '
+                  f'互搏胜率 L{duel_wins[0]/max(1, duel_total)*100:.0f}%/R{duel_wins[1]/max(1, duel_total)*100:.0f}% '
+                  f'耗时{(time.time()-t0)/60:.1f}m', flush=True)
             append_history(total_games, score, grade, avg)  # 波形图历史（综合得分）
-            # ── 自适应探索：分数平台期 → 提高采样温度激发新行为（左右共享温度）──
-            if score is not None:
-                score_window.append(score)
-                if len(score_window) > PLATEAU_WINDOW:
-                    score_window.pop(0)
-                if len(score_window) >= PLATEAU_WINDOW:
-                    spread = max(score_window) - min(score_window)
-                    if spread < PLATEAU_DELTA:
-                        plateau_count += 1   # 平台期：温度档位 +1
-                    else:
-                        plateau_count = 0    # 分数在动，恢复正常温度
-                new_temp = min(TEMP_BASE + TEMP_STEP * plateau_count, TEMP_MAX)
-                if new_temp != left_policy.temp:
-                    print(f'  自适应探索：温度 {left_policy.temp:.2f} → {new_temp:.2f}（平台档 {plateau_count}）', flush=True)
-                    left_policy.temp = right_policy.temp = new_temp
+            # ── 自适应探索（牢大定）：互搏失败率驱动，左右独立 ──
+            # 某侧失败率一直很低（一直赢）→ 该侧更激进噪点随机，走出舒适区；
+            # 失败率太高（输麻了）→ 温度回落收敛。规则 AI 局不计（指标只认互搏）。
+            if len(duel_results) >= 10:
+                for side, pol in ((0, left_policy), (1, right_policy)):
+                    fail = sum(1 for w in duel_results if w != side) / len(duel_results)
+                    if fail <= FAIL_LOW:
+                        nt = min(pol.temp + TEMP_STEP, TEMP_MAX)
+                        if nt != pol.temp:
+                            print(f'  动态噪点: {"左" if side == 0 else "右"}策略互搏失败率 {fail:.0%}（一直赢）→ 温度 {pol.temp:.2f} → {nt:.2f}（更激进探索）', flush=True)
+                            pol.temp = nt
+                    elif fail >= FAIL_HIGH:
+                        nt = max(pol.temp - TEMP_STEP, TEMP_BASE)
+                        if nt != pol.temp:
+                            print(f'  动态噪点: {"左" if side == 0 else "右"}策略互搏失败率 {fail:.0%}（输麻了）→ 温度 {pol.temp:.2f} → {nt:.2f}（收敛）', flush=True)
+                            pol.temp = nt
             lv = next_version(BC_WEIGHTS_LEFT)
             rv = next_version(BC_WEIGHTS_RIGHT)
             left_policy.save(BC_WEIGHTS_LEFT, version=lv,
                              extra={'games': total_games, 'side': 'left', 'avgReward': round(avg, 3),
-                                    'score': score, 'grade': grade, 'temp': left_policy.temp})
+                                    'score': score, 'grade': grade, 'temp': left_policy.temp,
+                                    'duelWinRate': round(duel_wins[0] / max(1, duel_total), 3)})
             right_policy.save(BC_WEIGHTS_RIGHT, version=rv,
                               extra={'games': total_games, 'side': 'right', 'avgReward': round(avg, 3),
-                                     'score': score, 'grade': grade, 'temp': right_policy.temp})
+                                     'score': score, 'grade': grade, 'temp': right_policy.temp,
+                                     'duelWinRate': round(duel_wins[1] / max(1, duel_total), 3)})
             write_status({'state': 'running', 'games': total_games, 'avgReward': round(avg, 3),
                           'score': score, 'grade': grade, 'rlVersion': lv,
                           'leftVersion': lv, 'rightVersion': rv, 'baseWinRate': base_wr, 'baseScore': base_score,
-                          'temp': left_policy.temp, 'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
+                          'leftTemp': left_policy.temp, 'rightTemp': right_policy.temp,
+                          'duelWinRateL': round(duel_wins[0] / max(1, duel_total), 3),
+                          'duelWinRateR': round(duel_wins[1] / max(1, duel_total), 3),
+                          'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
         elif round_games > 0 and round_games % SAVE_EVERY == 0:
             lv = next_version(BC_WEIGHTS_LEFT)
             rv = next_version(BC_WEIGHTS_RIGHT)
@@ -842,6 +871,7 @@ def main():
             write_status({'state': 'running', 'games': total_games, 'avgReward': round(avg, 3),
                           'rlVersion': lv, 'leftVersion': lv, 'rightVersion': rv,
                           'baseWinRate': base_wr, 'baseScore': base_score,
+                          'leftTemp': left_policy.temp, 'rightTemp': right_policy.temp,
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
 
 
