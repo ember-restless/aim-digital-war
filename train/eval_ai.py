@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Python 版模型 AI（评估用）—— 与 client/lib/train/train_ai.dart 同构
-- 加载 train_weights.json（MLP 101→128→128→193）
+- 加载 train_weights.json（MLP 134→128→128→305）
 - 决策：阶段选择交给网络，已选阶段后行动用模型前向 + 合法动作 mask
 - 视角归一化：我方（game.turn）恒为左方，flip 时棋盘镜像（先补零到 16 格再逆序）、
   槽位索引翻转（15-i，与训练端 rebuild 恒 16 格一致）
@@ -16,9 +16,9 @@ sys.path.insert(0, '/root/aim/pc')
 from ai import AimAi
 from rules import AimCell
 
-IN_DIM = 101
+IN_DIM = 16 * 8 + 6   # 134：16格×8特征 + 6全局（与人类视野一致，含滚木按压/回合数）
 HIDDEN = 128
-OUT = 193
+OUT = 16 * 19 + 1     # 305：16格×19槽 + endTurn（split 按 keep 拆 8 槽，与人类操作一致）
 MAX_CELLS = 16
 
 
@@ -94,13 +94,16 @@ class ModelAi:
                   1.0 if (c.o is not None and c.o != me) else 0.0,
                   1.0 if c.bridge else 0.0,
                   1.0 if c.onBridge else 0.0,
-                  1.0 if c.auto else 0.0]
-        while len(x) < MAX_CELLS * 6:
-            x += [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                  1.0 if c.auto else 0.0,
+                  (c.pressedV or 0) / 9.0,
+                  1.0 if c.pressedV is not None else 0.0]
+        while len(x) < MAX_CELLS * 8:
+            x += [0.0] * 8
         x += [0.0,  # 归一化视角下我方恒为玩家0
               1.0 if game.phase == 'action' else 0.0,
               1.0 if game.phase == 'produce' else 0.0,
-              game.points / 10.0, game.produce_left / 8.0]
+              game.points / 10.0, game.produce_left / 8.0,
+              game.turn_count / 100.0]
         return np.array(x, dtype=np.float64)
 
     def _slot(self, action, flip, game=None):
@@ -112,24 +115,27 @@ class ModelAi:
             i = MAX_CELLS - 1 - i
         if t == 'move':
             steps = int(action.get('steps', 1))
-            return i * 12 + (1 if steps >= 2 else 0)
+            return i * 19 + (1 if steps >= 2 else 0)
         if t == 'attack':
             k = abs(int(action.get('j', -1)) - int(action.get('i', -1)))
             if k < 1 or k > 3:
                 return None
             j = int(action.get('j', -1))
             is_enemy = 0 <= j < len(game.cells) and game.cells[j].o is not None and game.cells[j].o != game.turn
-            return i * 12 + (2 + (k - 1) if is_enemy else 5 + (k - 1))
+            return i * 19 + (2 + (k - 1) if is_enemy else 5 + (k - 1))
         if t == 'devour':
             j = int(action.get('j', -1))
             is_enemy = 0 <= j < len(game.cells) and game.cells[j].o is not None and game.cells[j].o != game.turn
-            return i * 12 + (8 if is_enemy else 9)
+            return i * 19 + (8 if is_enemy else 9)
         if t == 'split':
-            return i * 12 + 10
+            keep = int(action.get('keep', 1))
+            if keep < 1 or keep > 8:
+                return None
+            return i * 19 + (9 + keep)
         if t == 'produce':
-            return i * 12 + 11
+            return i * 19 + 18
         if t == 'endTurn':
-            return 16 * 12
+            return 16 * 19
         return None
 
     def decide(self, game):

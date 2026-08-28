@@ -3,7 +3,7 @@
 """
 AIM 行为克隆训练（模仿学习）—— 从训练场对局数据学人类走法
 - 数据：/root/aim/train_data/games.jsonl（每行一局，训练场 /api/train/upload 写入）
-- 网络：MLP 101 → 128 → 128 → 193（槽位 = 16格×12操作 + endTurn），与 client/lib/train/train_ai.dart 同构
+- 网络：MLP 134 → 128 → 128 → 305（槽位 = 16格×19操作 + endTurn，split 按 keep 拆 8 槽，与 client/lib/train/train_ai.dart 同构）
 - 输出：train_weights_left.json / train_weights_right.json（左右 AI 独立权重，--side 指定训练侧；
   version 自增，客户端拉取即生效）
 用法：python3 train_bc.py [--epochs 80] [--deploy] [--side left|right]
@@ -22,10 +22,17 @@ from rules import AimGame, AimCell
 DATA_FILE = '/root/aim/train_data/games.jsonl'
 WEIGHTS_LEFT = '/root/aim/server/public/downloads/train_weights_left.json'
 WEIGHTS_RIGHT = '/root/aim/server/public/downloads/train_weights_right.json'
-OUT_SLOTS = 16 * 12 + 1  # 193：16格×12槽（move1, move2, atk敌1..3, atk己1..3, dev敌, dev己, split, produce）+ endTurn
-IN_DIM = 16 * 6 + 5      # 101：16格×6特征 + 5全局
+OUT_SLOTS = 16 * 19 + 1  # 305：16格×19槽 + endTurn —— 与人类操作全集一致
+# 每格 19 槽：move1, move2, atk敌1..3, atk己1..3, dev敌, dev己,
+#            split keep=1..8（人类可指定拆分比例！8 槽覆盖 9 以内全部拆分）, produce
+# 旧版 split 只有 1 槽 → argmax 永远拆 keep=1（8→1+7 自毁基地、7→1+6 拆出滚木），
+# 网络根本表达不了「怎么拆」，只能选「拆不拆」。本次升级让 keep 进网络。
+IN_DIM = 16 * 8 + 6      # 134：16格×8特征 + 6全局 —— 与人类视野一致
+# 每格 8 特征：v/9, isMe, isEnemy, bridge, onBridge, auto,
+#            pressedV/9（滚木脚下压着的单位值，人类可见）, hasPressed（有无按压）
+# 全局 6：0(占位), phaseA, phaseP, points/10, produceLeft/8, turnCount/100
 HIDDEN = 128
-MAX_CELLS = 16           # 2026-08-28：8→16，与游戏 limit=16 对齐（此前只编码 8 格，后半棋盘是盲区）
+MAX_CELLS = 16           # 与游戏 limit=16 对齐
 
 # ── 数据加载 ──
 def load_games(path):
@@ -79,9 +86,11 @@ def normalize_view(g, owner):
     return True
 
 def action_slot(action, flip=False, game=None):
-    """动作 → 槽位（193）：每格 12 槽——
-    move1, move2, atk敌1..3, atk己1..3, dev敌, dev己, split, produce
+    """动作 → 槽位（305）：每格 19 槽——
+    move1, move2, atk敌1..3, atk己1..3, dev敌, dev己, split keep=1..8, produce
     攻击/吞噬槽位按「目标敌我 × 距离」细分，AI 能明确指定打谁（敌方优先习得）
+    split 按 keep 细分 8 槽——人类能指定拆分比例（1+6 / 3+4 / 4+3...），
+    网络必须能表达「怎么拆」，不再强制 keep=1 的自毁拆法。
     注意：翻转（flip）时 i 和 j 都必须镜像——game 已被 normalize_view 镜像
     且恒为 16 格（rebuild 补零），镜像公式 MAX_CELLS-1-i = 15-i 与推理端
     （补零到 16 格后 15-i）一致，否则右方状态下敌我判定错位会导致打自己。
@@ -94,7 +103,7 @@ def action_slot(action, flip=False, game=None):
         i = MAX_CELLS - 1 - i  # 镜像：格子索引翻转
     if t == 'move':
         steps = int(action.get('steps', 1))
-        return i * 12 + (1 if steps >= 2 else 0)
+        return i * 19 + (1 if steps >= 2 else 0)
     if t == 'attack':
         k = abs(int(action.get('j', -1)) - int(action.get('i', -1)))  # 目标距离 1..3（翻转不变）
         if k < 1 or k > 3:
@@ -105,7 +114,7 @@ def action_slot(action, flip=False, game=None):
         # 目标是否敌方（o 非空且不是我方）
         is_enemy = bool(game is not None and 0 <= j < len(game.cells)
                         and game.cells[j].o is not None and game.cells[j].o != game.turn)
-        return i * 12 + (2 + (k - 1) if is_enemy else 5 + (k - 1))
+        return i * 19 + (2 + (k - 1) if is_enemy else 5 + (k - 1))
     if t == 'devour':
         j = int(action.get('j', -1))
         if flip:
@@ -113,13 +122,16 @@ def action_slot(action, flip=False, game=None):
         is_enemy = False
         if game is not None and 0 <= j < len(game.cells):
             is_enemy = game.cells[j].o is not None and game.cells[j].o != game.turn
-        return i * 12 + (8 if is_enemy else 9)
+        return i * 19 + (8 if is_enemy else 9)
     if t == 'split':
-        return i * 12 + 10
+        keep = int(action.get('keep', 1))
+        if keep < 1 or keep > 8:
+            return None
+        return i * 19 + (9 + keep)  # keep=1→槽10, keep=2→槽11 ... keep=8→槽17
     if t == 'produce':
-        return i * 12 + 11
+        return i * 19 + 18
     if t == 'endTurn':
-        return 96
+        return 16 * 19
     return None
 
 def core_eq(a, b):
@@ -129,15 +141,24 @@ def core_eq(a, b):
     return True
 
 def encode_state(g):
+    """134 维：16格×8特征 + 6全局（与人类视野一致）
+    每格：v/9, isMe, isEnemy, bridge, onBridge, auto,
+         pressedV/9（滚木脚下压着的单位值）, hasPressed（有无按压）
+    全局：0(占位), phaseA, phaseP, points/10, produceLeft/8, turnCount/100
+    """
     x = []
     for c in g.cells[:MAX_CELLS]:
-        x += [c.v / 9.0, 1.0 if c.o == 0 else 0.0, 1.0 if c.o == 1 else 0.0,
-              1.0 if c.bridge else 0.0, 1.0 if c.onBridge else 0.0, 1.0 if c.auto else 0.0]
-    while len(x) < MAX_CELLS * 6:
-        x += [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        x += [c.v / 9.0,
+              1.0 if c.o == 0 else 0.0, 1.0 if c.o == 1 else 0.0,
+              1.0 if c.bridge else 0.0, 1.0 if c.onBridge else 0.0, 1.0 if c.auto else 0.0,
+              (c.pressedV or 0) / 9.0,
+              1.0 if c.pressedV is not None else 0.0]
+    while len(x) < MAX_CELLS * 8:
+        x += [0.0] * 8
     x += [float(g.turn), 1.0 if g.phase == 'action' else 0.0,
           1.0 if g.phase == 'produce' else 0.0,
-          g.points / 10.0, g.produce_left / 8.0]
+          g.points / 10.0, g.produce_left / 8.0,
+          getattr(g, 'turn_count', 0) / 100.0]
     return np.array(x, dtype=np.float64)
 
 def build_samples(games, side=None):
@@ -336,7 +357,7 @@ def main():
         print(f'无有效样本（{stats}）')
         return
     print(f'样本数: {len(X)}  （{stats}）')
-    # 样本太少不部署：避免几局就触发训练导致权重反复横跳（193 槽大网络需要足量样本）
+    # 样本太少不部署：避免几局就触发训练导致权重反复横跳（305 槽大网络需要足量样本）
     # 手动训练可用 --force 绕过
     if len(X) < 150 and not args.force:
         print(f'有效样本仅 {len(X)} < 150，暂不部署（保留现有权重）；继续攒局，凑够再训')

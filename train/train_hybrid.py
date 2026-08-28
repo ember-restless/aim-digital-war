@@ -8,7 +8,7 @@ AIM 行为克隆 + 强化学习联合训练（hybrid：模仿的同时打分）�
 - 打分（RL）：全部左右互搏自博弈（牢大定：规则 AI 没参考价值，不打不学），
   指标 = 纯各项测试（能力考试）+ 双方对决成功率（互搏）
 - 联合 loss：L = L_ppo + β·L_bc，每次更新同时吃 RL 轨迹和人类样本（每侧独立）
-- 网络：101 → 128 → 128 → 193（16 格棋盘，与 train_bc.py 同构）+ 价值头
+- 网络：134 → 128 → 128 → 305（16 格棋盘，与 train_bc.py 同构）+ 价值头
 - 产出：直接部署两份权重（训练场按人类所在侧加载对面权重）+ rl_status.json（心跳）
 - 停止：touch train/rl_stop（优雅保存退出）
 用法：nohup python3 train_hybrid.py > train_hybrid.log 2>&1 &
@@ -35,7 +35,14 @@ HUMAN_DATA = os.path.join(BASE_DIR, 'train_data', 'games.jsonl')
 EVAL_TMP_L = os.path.join(BASE_DIR, 'train_data', 'rl_eval_tmp_left.json')
 EVAL_TMP_R = os.path.join(BASE_DIR, 'train_data', 'rl_eval_tmp_right.json')
 
-IN_DIM, HIDDEN, OUT = 16 * 6 + 5, 128, 16 * 12 + 1   # 101 → 128 → 128 → 193（16 格）
+IN_DIM, HIDDEN, OUT = 16 * 8 + 6, 128, 16 * 19 + 1   # 134 → 128 → 128 → 305（16 格，与人类视野/操作全集一致）
+# 输入 134 = 16格×8特征（v/9, isMe, isEnemy, bridge, onBridge, auto, pressedV/9, hasPressed）+ 6全局
+# （0占位, phaseA, phaseP, points/10, produceLeft/8, turnCount/100）——人类看得到的全在
+# 输出 305 = 16格×19槽（move1, move2, atk敌1..3, atk己1..3, dev敌, dev己,
+#                        split keep=1..8, produce）+ endTurn
+# 关键升级：split 按 keep 拆 8 槽——人类能指定拆分比例（3+4 而不是自毁的 1+6），
+# 旧版 1 槽 split 让 argmax 永远拆 keep=1（8→1+7 拆掉暴兵基地、7→1+6 拆出滚木），
+# 网络只能选「拆不拆」不能选「怎么拆」，行为必然弱智。现在 keep 进网络。
 MAX_CELLS = 16
 BC_BETA = 0.3          # BC 损失权重（模仿约束强度：太高学不出新东西，太低 RL 跑偏）
 BC_RELOAD_EVERY = 10   # 每 N 局重新读人类数据（增量吸收新对局）
@@ -196,13 +203,16 @@ class RlPolicy:
                   1.0 if (c.o is not None and c.o != me) else 0.0,
                   1.0 if c.bridge else 0.0,
                   1.0 if c.onBridge else 0.0,
-                  1.0 if c.auto else 0.0]
-        while len(x) < MAX_CELLS * 6:
-            x += [0.0] * 6
+                  1.0 if c.auto else 0.0,
+                  (c.pressedV or 0) / 9.0,
+                  1.0 if c.pressedV is not None else 0.0]
+        while len(x) < MAX_CELLS * 8:
+            x += [0.0] * 8
         x += [0.0,
               1.0 if game.phase == 'action' else 0.0,
               1.0 if game.phase == 'produce' else 0.0,
-              game.points / 10.0, game.produce_left / 8.0]
+              game.points / 10.0, game.produce_left / 8.0,
+              game.turn_count / 100.0]
         return np.array(x, dtype=np.float64)
 
     def slot_of(self, action, flip, game=None):
@@ -213,24 +223,31 @@ class RlPolicy:
         if flip:
             i = MAX_CELLS - 1 - i
         if t == 'move':
-            return i * 12 + (1 if int(action.get('steps', 1)) >= 2 else 0)
+            return i * 19 + (1 if int(action.get('steps', 1)) >= 2 else 0)
         if t == 'attack':
             k = abs(int(action.get('j', -1)) - int(action.get('i', -1)))
             if k < 1 or k > 3:
                 return None
             j = int(action.get('j', -1))
+            if flip:
+                j = MAX_CELLS - 1 - j
             is_enemy = 0 <= j < len(game.cells) and game.cells[j].o is not None and game.cells[j].o != game.turn
-            return i * 12 + (2 + (k - 1) if is_enemy else 5 + (k - 1))
+            return i * 19 + (2 + (k - 1) if is_enemy else 5 + (k - 1))
         if t == 'devour':
             j = int(action.get('j', -1))
+            if flip:
+                j = MAX_CELLS - 1 - j
             is_enemy = 0 <= j < len(game.cells) and game.cells[j].o is not None and game.cells[j].o != game.turn
-            return i * 12 + (8 if is_enemy else 9)
+            return i * 19 + (8 if is_enemy else 9)
         if t == 'split':
-            return i * 12 + 10
+            keep = int(action.get('keep', 1))
+            if keep < 1 or keep > 8:
+                return None
+            return i * 19 + (9 + keep)
         if t == 'produce':
-            return i * 12 + 11
+            return i * 19 + 18
         if t == 'endTurn':
-            return 16 * 12
+            return 16 * 19
         return None
 
     def can_produce(self, game, owner):
