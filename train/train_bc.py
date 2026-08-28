@@ -151,21 +151,32 @@ def build_samples(games):
             if not action:
                 continue
             g = rebuild(step, game.get('limit'))
-            # 隐式选阶段：UI 直接发操作（不显式 emit choosePhase），操作前 phase 为 null——
-            # 按动作类型推断阶段，并用规则引擎重算行动点/造兵点（记录里是未初始化的 0）
+            # 阶段选择也交给网络（2026-08-28 牢大：阶段选择不该用启发式）：
+            # UI 直接发操作（不显式 emit choosePhase），操作前 phase 为 null——
+            # 保留 phase=null 输入（two-hot 全 0），候选 = 行动类 + 造兵类并集，
+            # 人类发的动作类型本身就隐含了阶段选择（move=行动阶段，produce=造兵阶段）。
             if step.get('phase') is None:
                 t = action.get('type')
-                if t == 'produce':
-                    g.phase = 'produce'
-                    g.produce_left = g.count_of(owner, 8)
-                elif t in ('move', 'attack', 'devour', 'split'):
-                    g.phase = 'action'
-                    g.points = g.count_of(owner, 9) + 1
-                else:
+                if t not in ('move', 'attack', 'devour', 'split', 'produce'):
                     continue
-            acts = g.get_legal_actions(owner)
-            # 排除 endTurn（结束回合由游戏流程自动处理，不训练）
-            playable = [a for a in acts if a['type'] != 'endTurn']
+                # 行动类候选：临时切 action 阶段 + 重算行动点（枚举完还原）
+                g.phase = 'action'
+                g.points = g.count_of(owner, 9) + 1
+                playable = [a for a in g.get_legal_actions(owner) if a['type'] != 'endTurn']
+                # 造兵类候选：临时切 produce 阶段 + 重算造兵次数
+                g.phase = 'produce'
+                g.produce_left = g.count_of(owner, 8)
+                for a in g.get_legal_actions(owner):
+                    if a['type'] == 'produce' and a not in playable:
+                        playable.append(a)
+                # 还原 phase=null（编码 two-hot 全 0；points/produceLeft 还原记录值 0）
+                g.phase = None
+                g.points = int(step.get('points', 0))
+                g.produce_left = int(step.get('produceLeft', 0))
+            else:
+                acts = g.get_legal_actions(owner)
+                # 排除 endTurn（结束回合由游戏流程自动处理，不训练）
+                playable = [a for a in acts if a['type'] != 'endTurn']
             if not playable:
                 no_legal += 1
                 continue

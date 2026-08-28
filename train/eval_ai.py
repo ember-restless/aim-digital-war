@@ -93,8 +93,36 @@ class ModelAi:
 
     def decide(self, game):
         if game.phase is None:
-            # 阶段选择：启发式兜底（训练未覆盖阶段选择）
-            return self.fallback.decide(game)
+            # 2026-08-28 阶段选择交给网络（与训练端一致）：候选 = 行动类 + 造兵类并集，
+            # 编码 phase=null（two-hot 全 0），动作类型隐含阶段选择
+            acts = []
+            # 行动类：phase=null 时 get_legal_actions 返回 choosePhase×2 + 行动类，过滤掉前两者
+            acts.extend(a for a in game.get_legal_actions(game.turn)
+                        if a['type'] not in ('choosePhase', 'endTurn'))
+            # 造兵类：手动枚举（与规则 produce 分支一致）
+            me = game.turn
+            d = 1 if me == 0 else -1
+            for i, c in enumerate(game.cells):
+                if c.o == me and c.v == 8:
+                    j = i + d
+                    if 0 <= j < len(game.cells) and not game.cells[j].bridge:
+                        acts.append({'type': 'produce', 'i': i, 'j': j})
+            if not acts:
+                return {'type': 'choosePhase', 'phase': 'action'}
+            flip = me == 1
+            x = self._encode(game, me)
+            logits = self._forward(x)
+            if logits is None:
+                return self.fallback.decide(game)
+            best, best_a = -1e18, None
+            for a in acts:
+                slot = self._slot(a, flip, game)
+                if slot is None or slot >= self.out:
+                    continue
+                s = logits[slot]
+                if s > best:
+                    best, best_a = s, a
+            return best_a if best_a is not None else acts[0]
         acts = game.get_legal_actions(game.turn)
         playable = [a for a in acts if a['type'] != 'endTurn']
         if not playable:

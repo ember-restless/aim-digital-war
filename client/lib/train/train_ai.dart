@@ -81,8 +81,47 @@ class TrainAi {
     }
     if (!hasModel || _fallback == null) return _fallback?.decide(game);
     if (game.phase == null) {
-      // 阶段选择：用启发式（网络只做行动/造兵内部选择）
-      return _fallback!.decide(game);
+      // 2026-08-28 阶段选择交给网络（牢大定）：候选 = 行动类 + 造兵类并集，
+      // 与训练端一致（phase=null 输入 two-hot 全 0），选出的动作类型隐含阶段选择，
+      // 规则层 applyAction 会自动 doChoosePhase。
+      final acts = <Map<String, dynamic>>[];
+      // 行动类候选：phase=null 时 getLegalActions 返回 choosePhase×2 + 行动类（points 未初始化），
+      // 直接过滤掉 choosePhase/endTurn 即可得到行动类
+      acts.addAll(game.getLegalActions(owner)
+          .where((a) => a['type'] != 'choosePhase' && a['type'] != 'endTurn'));
+      // 造兵类候选：phase=null 时 getLegalActions 不含 produce，手动枚举（与规则 produce 分支一致）
+      final dir = owner == 0 ? 1 : -1;
+      for (var i = 0; i < game.cells.length; i++) {
+        final c = game.cells[i];
+        if (c.o == owner && c.v == 8) {
+          final j = i + dir;
+          if (j >= 0 && j < game.cells.length && !game.cells[j].bridge) {
+            acts.add({'type': 'produce', 'i': i, 'j': j});
+          }
+        }
+      }
+      if (acts.isEmpty) return {'type': 'choosePhase', 'phase': 'action'};
+      final x = _encode(game); // phase=null → 编码 two-hot 全 0，与训练一致
+      final logits = _forward(x);
+      if (logits == null) return _fallback!.decide(game);
+      double best = -1e18;
+      Map<String, dynamic>? bestAct;
+      final cands = <Map<String, dynamic>>[];
+      final flip = game.turn == 1;
+      for (final a in acts) {
+        final slot = _actionSlot(a, flip, game);
+        if (slot == null || slot >= logits.length) continue;
+        final s = logits[slot];
+        if (s > best) {
+          best = s;
+          bestAct = a;
+        }
+        cands.add(a);
+      }
+      if (explore && _rand.nextDouble() < 0.08 && cands.isNotEmpty) {
+        return cands[_rand.nextInt(cands.length)];
+      }
+      return bestAct ?? acts.first;
     }
     final acts = game.getLegalActions(owner);
     // 不做硬性动作过滤——坏习惯（打自己/乱拆）交由学习阶段纠正（RL 奖励惩罚）
