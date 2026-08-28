@@ -58,16 +58,23 @@ function trainStats() {
   let games = 0, steps = 0;
   let aiGames = 0, aiWins = 0;
   const pvpSeries = []; // 与真人对局序列：{n, aiWin}（n=局序，aiWin=AI 是否获胜）
+  const gameTs = [];    // 每局时间戳（数据量趋势用，最多 500 条防 payload 膨胀）
   const dataFile = path.join(__dirname, '..', '..', 'train_data', 'games.jsonl');
   try {
     if (fs.existsSync(dataFile)) {
-      const lines = fs.readFileSync(dataFile, 'utf8').trim().split('\n');
+      const raw = fs.readFileSync(dataFile, 'utf8').trim();
+      // 空文件 → 0 局（直接 split 会得到 [''] 数成 1）
+      const lines = raw ? raw.split('\n') : [];
       games = lines.length;
       let seq = 0;
       for (const l of lines) {
         try {
           const g = JSON.parse(l);
           steps += (g.steps || []).length;
+          if (g.ts) {
+            gameTs.push(g.ts);
+            if (gameTs.length > 500) gameTs.shift();
+          }
           // 从第一步的人类 owner 推断人类所在侧，算 AI 胜负
           const st = g.steps || [];
           const humanSide = st.length ? (st[0].owner ?? -1) : -1;
@@ -102,6 +109,8 @@ function trainStats() {
     aiGames, aiWins,
     aiWinRate: aiGames ? Math.round((aiWins / aiGames) * 1000) / 1000 : 0,
     pvpSeries,
+    // 数据量趋势：最近对局时间戳（原始字符串，monitor 自己聚合）
+    gameTs,
   };
   return trainStatsCache;
 }
