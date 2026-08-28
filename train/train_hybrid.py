@@ -5,7 +5,8 @@ AIM 行为克隆 + 强化学习联合训练（hybrid：模仿的同时打分）�
 - 左右 AI 权重不同（train_weights_left.json / train_weights_right.json），各自独立进化：
   左策略只从「左方（owner=0）」轨迹/人类样本学习，右策略只从「右方（owner=1）」学习
 - 模仿（BC）：人类对局（games.jsonl）按 owner 分流进两侧，交叉熵约束各自不跑偏
-- 打分（RL）：左右互搏自博弈 + 1/3 局 vs 规则 AI（左右交替，各自对齐评估目标）
+- 打分（RL）：全部左右互搏自博弈（牢大定：规则 AI 没参考价值，不打不学），
+  指标 = 纯各项测试（能力考试）+ 双方对决成功率（互搏）
 - 联合 loss：L = L_ppo + β·L_bc，每次更新同时吃 RL 轨迹和人类样本（每侧独立）
 - 网络：101 → 128 → 128 → 193（16 格棋盘，与 train_bc.py 同构）+ 价值头
 - 产出：直接部署两份权重（训练场按人类所在侧加载对面权重）+ rl_status.json（心跳）
@@ -22,7 +23,6 @@ import numpy as np
 sys.path.insert(0, '/root/aim/pc')
 sys.path.insert(0, '/root/aim/train')
 from rules import AimGame, AimCell
-from ai import AimAi
 
 BASE_DIR = '/root/aim'
 BC_WEIGHTS_LEFT = os.path.join(BASE_DIR, 'server/public/downloads/train_weights_left.json')
@@ -44,7 +44,7 @@ LR = 1e-3              # 手写 SGD（2e-3 配强奖励震荡过拟合，1e-3 �
 BATCH_GAMES = 16       # 每攒 N 局更新一次（≈950 步样本/更新，PPO 多 epoch 复用）
 PPO_EPOCHS = 4         # 每 batch 内循环更新次数（PPO 核心：样本复用）
 PPO_CLIP = 0.2         # 重要性采样比率裁剪
-SNAP_EVERY = 20        # 保留（与旧版兼容；双策略互搏无需快照，规则 AI 轮换提供参照）
+SNAP_EVERY = 20        # 保留（与旧版兼容；纯互搏无需快照，动态噪点提供参照）
 EVAL_EVERY = 25        # 每 N 局评估一次（牢大定：25 局，波形图更密）
 SAVE_EVERY = 20        # 每 N 局保存权重 + 心跳
 MAX_GUARD = 600        # 单局步数上限
@@ -312,18 +312,6 @@ class RlPolicy:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f)
-
-
-class RuleOpp:
-    """规则 AI 包装：统一 act 接口（与策略共用 play_game）。
-    混合对手用——纯自博弈会过拟合「自我风格」，评估打的是规则 AI，
-    让策略 1/3 时间对阵规则 AI，直接对齐评估目标。"""
-    def __init__(self, level, seed=0):
-        self.ai = AimAi(level, seed=seed)
-        self.level = level
-
-    def act(self, game, sample=True):
-        return self.ai.decide(game), 0.0
 
 
 # ── 自博弈一局：返回 (winner, traj, devour_stat) ──
@@ -731,27 +719,17 @@ def main():
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
             return
         # ── 一局自博弈 ──
-        # 1/3 局打规则 AI（左右交替：rule 执左 → 右策略学；rule 执右 → 左策略学）
-        # 其余左右互搏（双策略各自从自己侧轨迹学习）
-        if round_games > 0 and round_games % 6 == 0:
-            level = ('easy', 'normal', 'hard')[(total_games // 6) % 3]
-            rule = RuleOpp(level, seed=total_games)
-            winner, traj, dev = play_game(rule, right_policy, seed=total_games, record_for='b')
-        elif round_games > 0 and round_games % 3 == 0:
-            level = ('easy', 'normal', 'hard')[(total_games // 6) % 3]
-            rule = RuleOpp(level, seed=total_games)
-            winner, traj, dev = play_game(left_policy, rule, seed=total_games, record_for='a')
-        else:
-            winner, traj, dev = play_game(left_policy, right_policy, seed=total_games, record_for='both')
-            # 互搏局战绩（双方对决成功率 = 牢大定的核心指标）
-            if winner == 0:
-                duel_wins[0] += 1
-            elif winner == 1:
-                duel_wins[1] += 1
-            if winner is not None:
-                duel_results.append(winner)
-                if len(duel_results) > DUEL_WINDOW:
-                    duel_results.pop(0)
+        # 全部左右互搏（牢大定：easy/normal/hard 规则 AI 没参考价值，不打也不学）
+        winner, traj, dev = play_game(left_policy, right_policy, seed=total_games, record_for='both')
+        # 互搏局战绩（双方对决成功率 = 牢大定的核心指标）
+        if winner == 0:
+            duel_wins[0] += 1
+        elif winner == 1:
+            duel_wins[1] += 1
+        if winner is not None:
+            duel_results.append(winner)
+            if len(duel_results) > DUEL_WINDOW:
+                duel_results.pop(0)
         total_games += 1
         devour_total[0] += dev['enemy']
         devour_total[1] += dev['self']
