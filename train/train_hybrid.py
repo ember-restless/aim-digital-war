@@ -51,13 +51,17 @@ MAX_GUARD = 600        # 单局步数上限
 HISTORY_WINDOW_GAMES = 1000  # rl_history 只保留最近 1000 局（RL 一局=一次训练，牢大定）
 
 # ── 奖励塑形（针对 AIM 特殊性设计，非通用 RL 奖励）──
-# 胜负判据是 sum_of（双方所有单位数值总和，谁先归零谁输），所以核心信号用
-# 「战力差 Δ = 我方sum - 敌方sum」的每步变化：吞噬/击杀/造兵/产9/滚木碾人
-# 全部直接反映在 Δ 里，信号与胜负目标严格对齐。
-# 超9吞噬「变拉」（15→1+5=6）导致 sum 缩水，Δ 自动惩罚，无需硬编码禁招。
-# 校准原则：终局 ±R_WIN 绝对主导，每步奖励只做方向引导——
-# 否则策略会「刷奖励」（无脑吞敌 0.94/局）反而掉分（reward hacking）。
-R_DELTA = 0.15        # 战力差每变化 1 点（方向引导，弱化）
+# 胜负判据是 sum_of（双方所有单位数值总和，谁先归零谁输），核心信号是
+# 「战力差 Δ = 我方sum - 敌方sum」。
+# 牢大定 2026：每步按「全局状态」打分（不是只奖励 Δ 变化）——
+#   step_r = R_STATE * tanh(Δ/STATE_SCALE)  当前全局战力差的分（碾压→+，挨打→−）
+#          + 事件奖励（击杀/损失/吞噬/重复警告）
+#          − R_STEP_COST                     每走一步扣分：行动越多扣越多（逼高效）
+# 终局 = 结果基础分（胜/败）± 全局行为修正（平均Δ/K-D/造兵，幅度封顶防刷奖励）
+# 超9吞噬「变拉」（15→1+5=6）导致 sum 缩水，状态分自动惩罚，无需硬编码禁招。
+R_STATE = 0.5         # 每步全局状态分权重（tanh 压缩到 ±1 后乘）
+STATE_SCALE = 12.0    # 战力差归一化尺度：Δ=12 → tanh(1)≈0.76，Δ=24 → 0.96
+R_STEP_COST = 0.02    # 每走一步扣分（行动成本：100 步 -2，200 步 -4，配合速战折扣双罚拖局）
 R_KILL = 0.4          # 击杀敌方单位（Δ 之外的事件奖励）
 R_LOSS = -0.3         # 己方单位被灭
 R_DEVOUR_ENEMY = 0.8  # 吞噬敌方（Δ 已算 2v，这里只给引导量——2.0 会让策略无脑吞）
@@ -330,12 +334,13 @@ class RlPolicy:
 # traj: [(x, slot, lp, r, owner)] 每步即时奖励（终局综合分已并入最后一步）
 # devour_stat: {'enemy': n, 'self': n} 本局吞噬敌/己次数（验证修正效果）
 # record_for: 'a'=只记玩家0（左）侧轨迹；'b'=只记玩家1（右）侧；'both'=两侧都记（左右互搏）
-# 奖励设计：
-#   1. 战力差 Δ 变化（动作阶段，滚木前结算）
+# 奖励设计（牢大定 2026）：
+#   1. 每步按全局状态打分：R_STATE * tanh(Δ/STATE_SCALE)，Δ=动作后我方战力差——
+#      碾压局面每步拿正分，挨打局面每步拿负分（不是只奖励变化量）
 #   2. 事件奖励：击杀/损失/吞噬敌/吞噬己/重复警告
-#   3. 滚木是回合间自动结算：效果记给滚木主人，挂在其下一次行动上（pending）
-#   4. 终局综合打分（牢大定）：结果基础分（胜/败）+ 全局行为修正——
-#      整局平均战力差（碾压加分/被压减分）、K/D、造兵运营，幅度封顶防刷奖励
+#   3. 每走一步扣 R_STEP_COST：行动越多扣越多，逼策略高效不磨蹭
+#   4. 滚木回合间自动结算：按滚木后全局状态给分，挂在其下一次行动上（pending），不扣步数
+#   5. 终局综合打分：结果基础分（胜/败）+ 全局行为修正（平均战力差/K/D/造兵）
 def play_game(policy_a, policy_b, seed=0, record_for='a'):
     g = AimGame(limit=16)
     ai_a, ai_b = policy_a, policy_b  # 玩家0=policy_a（左），玩家1=policy_b（右）
@@ -369,8 +374,6 @@ def play_game(policy_a, policy_b, seed=0, record_for='a'):
                 o = g.cells[j].o
                 devour_enemy = o is not None and o != owner
                 devour_self = o == owner
-        # 战力差快照（owner 视角）
-        delta0 = g.sum_of(owner) - g.sum_of(1 - owner)
         k0, l0 = g.stats['kills'][owner], g.stats['losses'][owner]
         r = g.apply_action(owner, a, defer_roll=True)
         if not r['ok']:
@@ -383,10 +386,11 @@ def play_game(policy_a, policy_b, seed=0, record_for='a'):
             a, lp = acts[0], 0.0
             slot = p.slot_of(a, flip, g)  # fallback 动作重新判定（仍在动作后，罕见）
         # ── 动作阶段奖励（滚木前，owner 视角）──
+        # 牢大定：每步按全局状态打分（tanh 压缩战力差）+ 事件奖励 − 行动成本
         delta1 = g.sum_of(owner) - g.sum_of(1 - owner)
         delta_acc[owner] += delta1
         delta_n[owner] += 1
-        step_r = R_DELTA * (delta1 - delta0)
+        step_r = R_STATE * np.tanh(delta1 / STATE_SCALE) - R_STEP_COST
         k1, l1 = g.stats['kills'][owner], g.stats['losses'][owner]
         kd, ld = k1 - k0, l1 - l0
         if devour_enemy:
@@ -402,7 +406,6 @@ def play_game(policy_a, policy_b, seed=0, record_for='a'):
         # ── 滚木阶段：自动结算，效果记给滚木主人（= 当前 g.turn）──
         if g.has_pending_roll:
             roller = g.turn
-            rd0 = g.sum_of(roller) - g.sum_of(1 - roller)
             rk0, rl0 = g.stats['kills'][roller], g.stats['losses'][roller]
             while g.has_pending_roll:
                 if g.roll_step_once(g.turn) is None:
@@ -411,7 +414,8 @@ def play_game(policy_a, policy_b, seed=0, record_for='a'):
             rd1 = g.sum_of(roller) - g.sum_of(1 - roller)
             delta_acc[roller] += rd1
             delta_n[roller] += 1
-            roll_r = R_DELTA * (rd1 - rd0)
+            # 滚木结算：按全局状态打分（不扣步数——不是行动），事件奖励照旧
+            roll_r = R_STATE * np.tanh(rd1 / STATE_SCALE)
             rk1, rl1 = g.stats['kills'][roller], g.stats['losses'][roller]
             roll_r += R_KILL * (rk1 - rk0) + R_LOSS * (rl1 - rl0)
             pending[roller] += roll_r
