@@ -20,7 +20,8 @@ from ai import AimAi
 from eval_ai import ModelAi
 from eval_bench import run_bench
 
-WEIGHTS = '/root/aim/server/public/downloads/train_weights.json'
+WEIGHTS_LEFT = '/root/aim/server/public/downloads/train_weights_left.json'
+WEIGHTS_RIGHT = '/root/aim/server/public/downloads/train_weights_right.json'
 OUT = '/root/aim/train_data/eval_result.json'
 
 
@@ -95,13 +96,17 @@ def compute_score(summary, bench, gs, results):
     return {'total': total, 'max': 100, 'grade': grade, 'items': items}
 
 
-def run_eval(weights_path, games_spec='easy=3,normal=3,hard=5', out_path=None):
-    """完整评估（对局 + 能力考试 + 综合评分），返回 data dict；out_path 非空则落盘"""
-    if not os.path.exists(weights_path):
+def run_eval(left_weights, right_weights=None, games_spec='easy=3,normal=3,hard=5', out_path=None):
+    """完整评估（对局 + 能力考试 + 综合评分），返回 data dict；out_path 非空则落盘。
+    左右双权重：side=0（AI 执左）用 left_weights，side=1（AI 执右）用 right_weights；
+    right_weights=None 时回退用 left（兼容单权重调用）。"""
+    if not os.path.exists(left_weights):
         return None
+    if right_weights is None:
+        right_weights = left_weights
     model_ver = 0
     try:
-        model_ver = int(json.load(open(weights_path, encoding='utf-8')).get('version', 0))
+        model_ver = int(json.load(open(left_weights, encoding='utf-8')).get('version', 0))
     except Exception:
         pass
     plan = []
@@ -117,8 +122,9 @@ def run_eval(weights_path, games_spec='easy=3,normal=3,hard=5', out_path=None):
             wins = 0
             turns = []
             win_turns = []
+            wpath = left_weights if side == 0 else right_weights
             for i in range(n):
-                m = ModelAi(weights_path, seed=i * 7 + side * 101)
+                m = ModelAi(wpath, seed=i * 7 + side * 101)
                 o = AimAi(opp, seed=i * 13 + side * 37)
                 if side == 0:
                     w, tc, st, md = play(m, o, seed=i)
@@ -170,7 +176,7 @@ def run_eval(weights_path, games_spec='easy=3,normal=3,hard=5', out_path=None):
             'avgWinTurns': round(agg['winTurns'] / agg['winN'], 1) if agg['winN'] else 0,
             'maxDigit': agg['maxDigit'],
         },
-        'bench': run_bench(weights_path),
+        'bench': run_bench(left_weights),
         'score': None,
     }
     data['score'] = compute_score(summary, data['bench'], data['gameStats'], results)
@@ -188,7 +194,7 @@ def main():
     ap.add_argument('--games', default='easy=4,normal=4,hard=8',
                     help='各对手每侧局数，如 easy=4,normal=4,hard=8（与 triggerEval/RL 训练统一，16 局降噪）')
     args = ap.parse_args()
-    run_eval(WEIGHTS, args.games, OUT)
+    run_eval(WEIGHTS_LEFT, WEIGHTS_RIGHT, args.games, OUT)
 
 
 if __name__ == '__main__':

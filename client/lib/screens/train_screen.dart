@@ -34,7 +34,10 @@ class TrainScreen extends StatefulWidget {
 
 class _TrainScreenState extends State<TrainScreen> {
   late LocalAimSocket socket;
-  final TrainAi trainAi = TrainAi();
+  // 左右 AI 独立权重：人类打左（humanSide=0）时 AI 执右 → 用右策略；
+  // 人类打右（humanSide=1）时 AI 执左 → 用左策略
+  final TrainAi trainAiLeft = TrainAi();
+  final TrainAi trainAiRight = TrainAi();
   dynamic gameState;
   dynamic gameOver;
   bool _aiReady = false;
@@ -42,7 +45,8 @@ class _TrainScreenState extends State<TrainScreen> {
   String _uploadMsg = '';
   int _games = 0;
   int _steps = 0;
-  int _modelVersion = 0;
+  int _modelVersionL = 0;
+  int _modelVersionR = 0;
   bool _training = false;
   Timer? _statsTimer;
   int _humanSide = 0; // 人类所在侧（0=左，1=右），每局翻转
@@ -59,7 +63,10 @@ class _TrainScreenState extends State<TrainScreen> {
   }
 
   Future<void> _initAi() async {
-    await trainAi.loadFromUrl('${AppConfig.serverUrl}/downloads/train_weights.json');
+    await Future.wait([
+      trainAiLeft.loadFromUrl('${AppConfig.serverUrl}/downloads/train_weights_left.json'),
+      trainAiRight.loadFromUrl('${AppConfig.serverUrl}/downloads/train_weights_right.json'),
+    ]);
     if (mounted) setState(() => _aiReady = true);
   }
 
@@ -73,11 +80,15 @@ class _TrainScreenState extends State<TrainScreen> {
       _uploadMsg = '';
     });
     // 双人对战：aiLevel=null（无 AI）、记录双方；单人对战：人类 vs AI 记录人类
+    // AI 用人类对面侧的权重（人类左 → AI 右策略；人类右 → AI 左策略）
+    final aiModel = _humanSide == 0 ? trainAiRight : trainAiLeft;
     socket = LocalAimSocket(limit: 16,
         aiLevel: _duoMode ? null : AiLevel.hard, humanSide: _humanSide)
       ..recordMode = true
       ..duoMode = _duoMode
-      ..aiDecider = (!_duoMode && trainAi.hasModel) ? trainAi.decide : null;
+      ..aiDecider = (!_duoMode && (trainAiLeft.hasModel || trainAiRight.hasModel))
+          ? aiModel.decide
+          : null;
     socket.onEvent = (event, data) {
       if (!mounted) return;
       if (event == 'game_state') {
@@ -146,16 +157,18 @@ class _TrainScreenState extends State<TrainScreen> {
           .timeout(const Duration(seconds: 8));
       if (resp.statusCode == 200) {
         final j = jsonDecode(resp.body) as Map<String, dynamic>;
-        final newVer = (j['modelVersion'] as num?)?.toInt() ?? 0;
+        final newVerL = (j['leftVersion'] as num?)?.toInt() ?? 0;
+        final newVerR = (j['rightVersion'] as num?)?.toInt() ?? 0;
         if (mounted) {
           setState(() {
             _games = (j['games'] as num?)?.toInt() ?? 0;
             _steps = (j['steps'] as num?)?.toInt() ?? 0;
             _training = j['training'] == true;
             // 模型版本变化 → 拉新权重（对局中 AI 自动切到新模型）
-            if (newVer != _modelVersion) {
-              _modelVersion = newVer;
-              if (newVer > 0) _reloadModel();
+            if (newVerL != _modelVersionL || newVerR != _modelVersionR) {
+              _modelVersionL = newVerL;
+              _modelVersionR = newVerR;
+              if (newVerL > 0 || newVerR > 0) _reloadModel();
             }
           });
         }
@@ -164,9 +177,13 @@ class _TrainScreenState extends State<TrainScreen> {
   }
 
   Future<void> _reloadModel() async {
-    await trainAi.loadFromUrl('${AppConfig.serverUrl}/downloads/train_weights.json');
-    if (mounted && _modelVersion > 0 && trainAi.hasModel) {
-      setState(() => _uploadMsg = '✨ AI 已升级到模型 v$_modelVersion');
+    await Future.wait([
+      trainAiLeft.loadFromUrl('${AppConfig.serverUrl}/downloads/train_weights_left.json'),
+      trainAiRight.loadFromUrl('${AppConfig.serverUrl}/downloads/train_weights_right.json'),
+    ]);
+    if (mounted && (_modelVersionL > 0 || _modelVersionR > 0) &&
+        (trainAiLeft.hasModel || trainAiRight.hasModel)) {
+      setState(() => _uploadMsg = '✨ AI 已升级 Lv$_modelVersionL / Rv$_modelVersionR');
       // 提醒一次后清掉（避免常驻）
       Future.delayed(const Duration(seconds: 4), () {
         if (mounted) setState(() => _uploadMsg = '');
@@ -214,7 +231,11 @@ class _TrainScreenState extends State<TrainScreen> {
                     const SizedBox(height: 16),
                     _pt('训练场加载中…', 13, _dim),
                     const SizedBox(height: 8),
-                    _pt(_aiReady ? (trainAi.hasModel ? 'AI：模型 v${trainAi.version}' : 'AI：启发式（未训练）') : 'AI 模型加载中…', 12, _warn),
+                    _pt(_aiReady
+                        ? ((trainAiLeft.hasModel || trainAiRight.hasModel)
+                            ? 'AI：Lv${trainAiLeft.version}/Rv${trainAiRight.version}'
+                            : 'AI：启发式（未训练）')
+                        : 'AI 模型加载中…', 12, _warn),
                   ]),
                 ),
         ),
@@ -226,7 +247,9 @@ class _TrainScreenState extends State<TrainScreen> {
   Widget _statsBar() {
     final aiName = _duoMode
         ? '双人对战'
-        : (trainAi.hasModel ? 'AI·模型 v${trainAi.version}' : 'AI·启发式');
+        : ((trainAiLeft.hasModel || trainAiRight.hasModel)
+            ? 'AI·模型 Lv${trainAiLeft.version}/Rv${trainAiRight.version}'
+            : 'AI·启发式');
     return Container(
       color: const Color(0xFF1A1916),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),

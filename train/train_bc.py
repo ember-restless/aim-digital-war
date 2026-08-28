@@ -4,8 +4,9 @@
 AIM 行为克隆训练（模仿学习）—— 从训练场对局数据学人类走法
 - 数据：/root/aim/train_data/games.jsonl（每行一局，训练场 /api/train/upload 写入）
 - 网络：MLP 101 → 128 → 128 → 193（槽位 = 16格×12操作 + endTurn），与 client/lib/train/train_ai.dart 同构
-- 输出：/root/aim/server/public/downloads/train_weights.json（version 自增，客户端拉取即生效）
-用法：python3 train_bc.py [--epochs 80] [--deploy]
+- 输出：train_weights_left.json / train_weights_right.json（左右 AI 独立权重，--side 指定训练侧；
+  version 自增，客户端拉取即生效）
+用法：python3 train_bc.py [--epochs 80] [--deploy] [--side left|right]
 """
 import argparse
 import json
@@ -19,7 +20,8 @@ sys.path.insert(0, '/root/aim/pc')
 from rules import AimGame, AimCell
 
 DATA_FILE = '/root/aim/train_data/games.jsonl'
-WEIGHTS_FILE = '/root/aim/server/public/downloads/train_weights.json'
+WEIGHTS_LEFT = '/root/aim/server/public/downloads/train_weights_left.json'
+WEIGHTS_RIGHT = '/root/aim/server/public/downloads/train_weights_right.json'
 OUT_SLOTS = 16 * 12 + 1  # 193：16格×12槽（move1, move2, atk敌1..3, atk己1..3, dev敌, dev己, split, produce）+ endTurn
 IN_DIM = 16 * 6 + 5      # 101：16格×6特征 + 5全局
 HIDDEN = 128
@@ -138,8 +140,11 @@ def encode_state(g):
           g.points / 10.0, g.produce_left / 8.0]
     return np.array(x, dtype=np.float64)
 
-def build_samples(games):
-    """返回 (X, Y_onehot, ok_count, skip_reasons)"""
+def build_samples(games, side=None):
+    """返回 (X, Y_onehot, ok_count, skip_reasons)
+    side=None：全部样本；side=0：只取左方（owner==0）步；side=1：只取右方（owner==1）步。
+    游戏状态照常逐局重建推进（保持局内连续性），只产出指定侧的样本——
+    双人局的左右数据据此分流（左右 AI 各自独立训练）。"""
     X, Y = [], []
     ok = 0
     no_legal = 0
@@ -147,6 +152,8 @@ def build_samples(games):
     for game in games:
         for step in game.get('steps', []):
             owner = int(step.get('owner', 0))
+            if side is not None and owner != side:
+                continue
             action = step.get('action')
             if not action:
                 continue
@@ -309,18 +316,22 @@ def main():
                     help='附加训练数据文件（jsonl，如规则 AI 合成对局），与人类数据合并训练')
     ap.add_argument('--deploy', action='store_true', help='训练完写权重到下载目录（客户端拉取生效）')
     ap.add_argument('--force', action='store_true', help='样本不足 150 也强制训练部署（手动验证用）')
+    ap.add_argument('--side', default=None, choices=[None, 'left', 'right'],
+                    help='只训练指定侧（left=左方 owner0 / right=右方 owner1），None=全部样本')
     args = ap.parse_args()
+    side_id = {'left': 0, 'right': 1}.get(args.side)
+    WEIGHTS_FILE = WEIGHTS_LEFT if args.side == 'left' else WEIGHTS_RIGHT if args.side == 'right' else None
 
     games = load_games(DATA_FILE)
     if args.extra_data:
         extra = load_games(args.extra_data)
         print(f'附加数据: {args.extra_data} → {len(extra)} 局')
         games = games + extra
-    print(f'对局数: {len(games)}')
+    print(f'对局数: {len(games)}' + (f'（训练侧: {args.side}）' if args.side else ''))
     if not games:
         print('没有训练数据，先去训练场打几局（http://192.140.166.178:5000/train/）')
         return
-    X, Y, stats = build_samples(games)
+    X, Y, stats = build_samples(games, side=side_id)
     if X is None:
         print(f'无有效样本（{stats}）')
         return
@@ -335,7 +346,7 @@ def main():
     # warm start：从现有权重继续（RL 部署后不会被从零训练覆盖，平滑演进）
     # --fresh 时跳过：修复标注后旧权重残留错误行为，需从头洗掉
     init = None
-    if not args.fresh and os.path.exists(WEIGHTS_FILE):
+    if WEIGHTS_FILE and not args.fresh and os.path.exists(WEIGHTS_FILE):
         try:
             w = json.load(open(WEIGHTS_FILE, encoding='utf-8'))
             if w.get('out') == OUT_SLOTS and w.get('in') == IN_DIM:
@@ -355,9 +366,12 @@ def main():
     params = train_mlp(X, Y, epochs=args.epochs, lr=args.lr, init=init)
     print(f'训练耗时 {time.time() - t0:.1f}s')
     if args.deploy:
-        v = save_weights(params, WEIGHTS_FILE)
-        print(f'已部署权重 v{v} → {WEIGHTS_FILE}')
-        print('训练场/游戏客户端下次拉取即生效（无需重启服务器）')
+        if WEIGHTS_FILE is None:
+            print('未指定 --side（left/right），跳过部署（预览权重仍会保存）')
+        else:
+            v = save_weights(params, WEIGHTS_FILE)
+            print(f'已部署权重 v{v} → {WEIGHTS_FILE}')
+            print('训练场/游戏客户端下次拉取即生效（无需重启服务器）')
     else:
         v = save_weights(params, '/root/aim/covers/train_weights_preview.json')
         print(f'预览权重已存 /root/aim/covers/train_weights_preview.json（v{v}）')

@@ -53,18 +53,27 @@ function readEvalInfo() {
 function trainStats() {
   // 模型版本/更新时间：每次实时读权重文件——手动部署/回滚/训练后立即反映，
   // 不依赖缓存失效（否则监视台显示旧版本误导）
-  let modelVersion = 0, modelUpdatedAt = null;
-  const wf = path.join(DOWNLOAD_DIR, 'train_weights.json');
-  try {
-    if (fs.existsSync(wf)) {
-      const w = JSON.parse(fs.readFileSync(wf, 'utf8'));
-      modelVersion = w.version || 1;
-      modelUpdatedAt = w.updatedAt || null;
-    }
-  } catch (_) {}
+  // 左右 AI 独立权重：train_weights_left.json / train_weights_right.json
+  function readWeights(name) {
+    const wf = path.join(DOWNLOAD_DIR, name);
+    try {
+      if (fs.existsSync(wf)) {
+        const w = JSON.parse(fs.readFileSync(wf, 'utf8'));
+        return { v: w.version || 1, ts: w.updatedAt || null };
+      }
+    } catch (_) {}
+    return { v: 0, ts: null };
+  }
+  const L = readWeights('train_weights_left.json');
+  const R = readWeights('train_weights_right.json');
+  // 兼容旧字段 modelVersion（单权重时期），新增 left/right 字段
+  const modelVersion = L.v, modelUpdatedAt = L.ts;
   if (trainStatsCache) {
     // 静态部分走缓存，RL 状态/历史 + 模型评估 + 版本实时读（eval 曾被缓存成旧值误导监视台）
-    return { ...trainStatsCache, modelVersion, modelUpdatedAt, rl: readRl(), rlHistory: readRlHistory(), eval: readEvalInfo() };
+    return { ...trainStatsCache, modelVersion, modelUpdatedAt,
+             leftVersion: L.v, leftUpdatedAt: L.ts,
+             rightVersion: R.v, rightUpdatedAt: R.ts,
+             rl: readRl(), rlHistory: readRlHistory(), eval: readEvalInfo() };
   }
   let games = 0, steps = 0;
   let aiGames = 0, aiWins = 0;
@@ -105,7 +114,9 @@ function trainStats() {
   // 模型实力评估结果（监视台展示：vs easy/normal/hard 胜率等）——实时读
   const evalInfo = readEvalInfo();
   trainStatsCache = {
-    games, steps, modelVersion, modelUpdatedAt, training, evaluating, lastTrainAt, eval: evalInfo,
+    games, steps, modelVersion, modelUpdatedAt,
+    leftVersion: L.v, leftUpdatedAt: L.ts, rightVersion: R.v, rightUpdatedAt: R.ts,
+    training, evaluating, lastTrainAt, eval: evalInfo,
     rl: readRl(), rlHistory: readRlHistory(),
     // 与真人对局：AI 场次/胜场/胜率 + 每局序列（折线图）
     aiGames, aiWins,
@@ -163,8 +174,9 @@ function triggerTrain() {
 // 模型实力评估：vs easy/normal/hard 各打几局（左右两侧），结果落盘 eval_result.json
 function triggerEval() {
   if (evaluating) return;
-  const wf = path.join(DOWNLOAD_DIR, 'train_weights.json');
-  if (!fs.existsSync(wf)) return; // 无权重不评
+  // 左右独立权重：至少一侧存在才评（eval_model.py 双权重读取，缺侧回退）
+  const wfL = path.join(DOWNLOAD_DIR, 'train_weights_left.json');
+  if (!fs.existsSync(wfL)) return; // 无权重不评
   evaluating = true;
   const logPath = path.join(__dirname, '..', '..', 'train', 'train.log');
   const out = fs.openSync(logPath, 'a');

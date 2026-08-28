@@ -329,5 +329,5 @@ def run_bench(model_path):
 
 if __name__ == '__main__':
     import json
-    r = run_bench('/root/aim/server/public/downloads/train_weights.json')
+    r = run_bench('/root/aim/server/public/downloads/train_weights_left.json')  # 考试局面 AI 恒执左 → 左策略
     print(json.dumps(r, ensure_ascii=False, indent=1))

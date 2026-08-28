@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AIM 行为克隆 + 强化学习联合训练（hybrid：模仿的同时打分）
-- 模仿（BC）：从人类对局（games.jsonl）学动作分布，交叉熵损失持续约束策略不跑偏
-- 打分（RL）：自博弈 vs 延迟快照/规则 AI，PPO 用奖励塑形优化策略
-- 联合 loss：L = L_ppo + β·L_bc，每次更新同时吃 RL 轨迹和人类样本
+AIM 行为克隆 + 强化学习联合训练（hybrid：模仿的同时打分）—— 左右分离双策略版
+- 左右 AI 权重不同（train_weights_left.json / train_weights_right.json），各自独立进化：
+  左策略只从「左方（owner=0）」轨迹/人类样本学习，右策略只从「右方（owner=1）」学习
+- 模仿（BC）：人类对局（games.jsonl）按 owner 分流进两侧，交叉熵约束各自不跑偏
+- 打分（RL）：左右互搏自博弈 + 1/3 局 vs 规则 AI（左右交替，各自对齐评估目标）
+- 联合 loss：L = L_ppo + β·L_bc，每次更新同时吃 RL 轨迹和人类样本（每侧独立）
 - 网络：101 → 128 → 128 → 193（16 格棋盘，与 train_bc.py 同构）+ 价值头
-- 产出：直接部署 train_weights.json（训练场/游戏拉取即生效）+ rl_status.json（心跳）
+- 产出：直接部署两份权重（训练场按人类所在侧加载对面权重）+ rl_status.json（心跳）
 - 停止：touch train/rl_stop（优雅保存退出）
 用法：nohup python3 train_hybrid.py > train_hybrid.log 2>&1 &
 """
@@ -23,12 +25,15 @@ from rules import AimGame, AimCell
 from ai import AimAi
 
 BASE_DIR = '/root/aim'
-BC_WEIGHTS = os.path.join(BASE_DIR, 'server/public/downloads/train_weights.json')
+BC_WEIGHTS_LEFT = os.path.join(BASE_DIR, 'server/public/downloads/train_weights_left.json')
+BC_WEIGHTS_RIGHT = os.path.join(BASE_DIR, 'server/public/downloads/train_weights_right.json')
 STATUS_FILE = os.path.join(BASE_DIR, 'train_data', 'rl_status.json')
 HISTORY_FILE = os.path.join(BASE_DIR, 'train_data', 'rl_history.jsonl')  # RL 评估历史（波形图用）
 STOP_FILE = os.path.join(BASE_DIR, 'train', 'rl_stop')
 EVAL_FILE = os.path.join(BASE_DIR, 'train_data', 'eval_result.json')
 HUMAN_DATA = os.path.join(BASE_DIR, 'train_data', 'games.jsonl')
+EVAL_TMP_L = os.path.join(BASE_DIR, 'train_data', 'rl_eval_tmp_left.json')
+EVAL_TMP_R = os.path.join(BASE_DIR, 'train_data', 'rl_eval_tmp_right.json')
 
 IN_DIM, HIDDEN, OUT = 16 * 6 + 5, 128, 16 * 12 + 1   # 101 → 128 → 128 → 193（16 格）
 MAX_CELLS = 16
@@ -39,10 +44,10 @@ LR = 1e-3              # 手写 SGD（2e-3 配强奖励震荡过拟合，1e-3 �
 BATCH_GAMES = 16       # 每攒 N 局更新一次（≈950 步样本/更新，PPO 多 epoch 复用）
 PPO_EPOCHS = 4         # 每 batch 内循环更新次数（PPO 核心：样本复用）
 PPO_CLIP = 0.2         # 重要性采样比率裁剪
-SNAP_EVERY = 20       # 每 N 局快照一次对手
-EVAL_EVERY = 25       # 每 N 局评估一次（牢大定：25 局，波形图更密）
-SAVE_EVERY = 20       # 每 N 局保存权重 + 心跳
-MAX_GUARD = 600       # 单局步数上限
+SNAP_EVERY = 20        # 保留（与旧版兼容；双策略互搏无需快照，规则 AI 轮换提供参照）
+EVAL_EVERY = 25        # 每 N 局评估一次（牢大定：25 局，波形图更密）
+SAVE_EVERY = 20        # 每 N 局保存权重 + 心跳
+MAX_GUARD = 600        # 单局步数上限
 HISTORY_WINDOW_GAMES = 1000  # rl_history 只保留最近 1000 局（RL 一局=一次训练，牢大定）
 
 # ── 奖励塑形（针对 AIM 特殊性设计，非通用 RL 奖励）──
@@ -80,8 +85,6 @@ WIN_TURN_PENALTY = 1.0   # 每 10 回合扣分（WIN_TURN_PENALTY * 10 回合）
 
 def xavier(fan_in, fan_out, rng):
     return rng.uniform(-1, 1, (fan_in, fan_out)) * np.sqrt(6.0 / (fan_in + fan_out))
-
-
 
 
 class RlPolicy:
@@ -316,6 +319,7 @@ class RuleOpp:
 # ── 自博弈一局：返回 (winner, traj, devour_stat) ──
 # traj: [(x, slot, lp, r, owner)] 每步即时奖励（终局 ±R_WIN/R_LOSE 已并入最后一步）
 # devour_stat: {'enemy': n, 'self': n} 本局吞噬敌/己次数（验证修正效果）
+# record_for: 'a'=只记玩家0（左）侧轨迹；'b'=只记玩家1（右）侧；'both'=两侧都记（左右互搏）
 # 奖励设计：
 #   1. 战力差 Δ 变化（动作阶段，滚木前结算）
 #   2. 事件奖励：击杀/损失/吞噬敌/吞噬己/重复警告
@@ -323,7 +327,7 @@ class RuleOpp:
 #   4. 终局 ±R_WIN/R_LOSE
 def play_game(policy_a, policy_b, seed=0, record_for='a'):
     g = AimGame(limit=16)
-    ai_a, ai_b = policy_a, policy_b  # 玩家0=policy_a，玩家1=policy_b
+    ai_a, ai_b = policy_a, policy_b  # 玩家0=policy_a（左），玩家1=policy_b（右）
     traj = []
     pending = [0.0, 0.0]   # 滚木结算奖励，等滚木主人下一次行动时并入
     devour_stat = {'enemy': 0, 'self': 0}
@@ -335,7 +339,8 @@ def play_game(policy_a, policy_b, seed=0, record_for='a'):
         a, lp = p.act(g, sample=True)
         if a is None:
             break
-        # 是否需要记录本步（ε 探索步 / 非模型侧不记录；规则 AI 无 encode 接口）
+        # 是否需要记录本步（ε 探索步 lp=None 不记录；规则 AI 无 encode 接口，
+        # 但 record_for 只针对模型侧 owner，规则 AI 执另一侧时天然不记）
         need_record = lp is not None and (
             record_for == 'both' or (record_for == 'a' and owner == 0) or (record_for == 'b' and owner == 1))
         # 动作前快照：状态编码 + 槽位判定必须在动作执行前（与 BC 数据/评估推理一致；
@@ -525,11 +530,12 @@ def update(policy, batch, bc=None, lr=LR, epochs=PPO_EPOCHS, clip=PPO_CLIP, bc_b
 # 之前 RL 训练内 58 分 vs 部署评估 48 分的 10 分差就是规格不一致导致的。
 EVAL_SPEC = 'easy=4,normal=4,hard=8'
 
-def eval_model_score(policy, tmp_path='/root/aim/train_data/rl_eval_tmp.json'):
-    """保存策略到临时权重，跑完整评估，返回 (score_total, grade)"""
-    policy.save(tmp_path, version=0)
+def eval_model_score(left_policy, right_policy):
+    """保存双策略到临时权重，跑完整评估（side=0 用左策略、side=1 用右策略）"""
+    left_policy.save(EVAL_TMP_L, version=0)
+    right_policy.save(EVAL_TMP_R, version=0)
     from eval_model import run_eval
-    data = run_eval(tmp_path, EVAL_SPEC)
+    data = run_eval(EVAL_TMP_L, EVAL_TMP_R, EVAL_SPEC)
     if not data:
         return None, None
     sc = data['score']
@@ -571,6 +577,15 @@ def append_history(games, score, grade, avg):
             f.write(json.dumps(d) + '\n')
 
 
+def next_version(path):
+    try:
+        if os.path.exists(path):
+            return int(json.load(open(path, encoding='utf-8')).get('version', 0)) + 1
+    except Exception:
+        pass
+    return 1
+
+
 def base_win_rate():
     """原模型（BC 基础）能力：eval_result.json 的 vs hard 胜率"""
     try:
@@ -583,7 +598,8 @@ def base_win_rate():
 
 
 def load_human_data(path=HUMAN_DATA):
-    """读人类对局 → BC 样本 (X, slots)。数据不足返回 None（纯 RL 阶段）。"""
+    """读人类对局 → 按 owner 分流的 BC 样本。
+    返回 {'left': (X, slots)|None, 'right': (X, slots)|None}；无数据返回 None。"""
     try:
         from train_bc import load_games, build_samples
     except Exception:
@@ -592,12 +608,42 @@ def load_human_data(path=HUMAN_DATA):
         games = load_games(path)
         if not games:
             return None
-        X, Y, stats = build_samples(games)
-        if X is None or len(X) < 10:
-            return None
-        return X, np.argmax(Y, axis=1)
+        out = {}
+        for side, key in ((0, 'left'), (1, 'right')):
+            try:
+                X, Y, _st = build_samples(games, side=side)
+            except Exception:
+                X = None
+            if X is not None and len(X) >= 10:
+                out[key] = (X, np.argmax(Y, axis=1))
+        return out or None
     except Exception:
         return None
+
+
+def bc_count(pool, key):
+    if pool is None or key not in pool:
+        return 0
+    return len(pool[key][0])
+
+
+def decision_diff(policy, base_ref, n=6):
+    """行为诊断：argmax 决策 vs base 的差异率（全局面轮转，两策略独立对比）"""
+    from rules import AimGame
+    same = diff = 0
+    for _ in range(n):
+        g = AimGame(limit=16); guard = 0
+        while g.winner is None and guard < 300:
+            guard += 1
+            a1, _ = base_ref.act(g, sample=False)
+            a2, _ = policy.act(g, sample=False)
+            if a1 == a2: same += 1
+            else: diff += 1
+            r = g.apply_action(g.turn, a1, defer_roll=True)
+            if not r['ok']: break
+            while g.has_pending_roll:
+                if g.roll_step_once(g.turn) is None: g.clear_pending_roll(); break
+    return diff / (same + diff) * 100 if (same + diff) else 0
 
 
 def main():
@@ -607,21 +653,17 @@ def main():
                     help='目标训练局数（0=无限跑；跑满自动停止并保存）')
     args = ap.parse_args()
     target_games = args.games
-    base_version = 0
-    try:
-        if os.path.exists(BC_WEIGHTS):
-            base_version = int(json.load(open(BC_WEIGHTS, encoding='utf-8')).get('version', 0))
-    except Exception:
-        pass
-    print(f'=== BC+RL 混合训练启动（base=BC v{base_version}）目标局数={target_games or "无限"} ===', flush=True)
+    print('=== BC+RL 混合训练启动（左右双策略独立进化）目标局数=%s ===' % (target_games or '无限'), flush=True)
     if os.path.exists(STOP_FILE):
         os.remove(STOP_FILE)
-    # 起点：BC 权重（train_weights.json，16 格 101→193）；无权重 → 从零初始化
-    start_weights = BC_WEIGHTS
-    policy = RlPolicy(BC_WEIGHTS, seed=42)
-    print('从 BC 权重起步（无权重则从零随机初始化）', flush=True)
-    base_ref = RlPolicy(BC_WEIGHTS, seed=0)  # 行为诊断参照（对比外部基线）
-    opponent = policy.clone()  # 延迟快照对手
+    # 左右策略各自加载/初始化（无权重 → 从零随机初始化，互不影响）
+    left_policy = RlPolicy(BC_WEIGHTS_LEFT, seed=42)
+    right_policy = RlPolicy(BC_WEIGHTS_RIGHT, seed=7)
+    print('左策略: %s；右策略: %s' % (
+        '从零初始化' if not os.path.exists(BC_WEIGHTS_LEFT) else '从左权重起步',
+        '从零初始化' if not os.path.exists(BC_WEIGHTS_RIGHT) else '从右权重起步'), flush=True)
+    base_ref_left = RlPolicy(BC_WEIGHTS_LEFT, seed=0)   # 行为诊断参照（与左策略同起点）
+    base_ref_right = RlPolicy(BC_WEIGHTS_RIGHT, seed=1)
     optimizer_lr = LR
     total_games = 0
     try:
@@ -631,35 +673,30 @@ def main():
     except Exception:
         pass
     start_games = total_games  # 本轮起点；target 按本轮局数判定
-    rewards = []
-    batch = []
-    bc_pool = load_human_data()   # 人类样本池（模仿约束），数据不足时 None
-    last_bc_loaded = 0
+    rewards_l, rewards_r = [], []
+    batch_left, batch_right = [], []
+    bc_pool = load_human_data()   # 人类样本池（按 side 分流），数据不足时 None
     devour_total = [0, 0]   # [吞敌, 吞己] 累计（验证吞噬修正效果）
-    sp_wins = 0             # 策略 vs 延迟快照胜局数（学习信号）
+    wins_left = wins_right = 0   # 自博弈左右各自胜局数
     score_window = []       # 最近 N 次评估分数（平台期检测）
     plateau_count = 0       # 平台期持续档位（探索率据此提升）
     t0 = time.time()
-    base_wr = base_win_rate()  # 原模型（BC 基础）vs hard 胜率（保留参考）
+    base_wr = base_win_rate()  # 原模型 vs hard 胜率（保留参考）
     base_score = None
-    try:
-        if os.path.exists(EVAL_FILE):
-            base_score = json.load(open(EVAL_FILE, encoding='utf-8')).get('score', {}).get('total')
-    except Exception:
-        pass
-    # 用起点权重实时评估一次——基准线与实际 warm start 权重一致
+    # 用起点权重实时评估一次（无权重则跳过）
     try:
         from eval_model import run_eval
-        data = run_eval(start_weights, EVAL_SPEC)
-        if data:
-            base_score = data['score']['total']
-            base_wr = data['summary'].get('vsHard')
-            print(f'实时基准评估: 起点综合分 {base_score}（{data["score"]["grade"]}） vsHard {base_wr}', flush=True)
+        if os.path.exists(BC_WEIGHTS_LEFT) or os.path.exists(BC_WEIGHTS_RIGHT):
+            data = run_eval(BC_WEIGHTS_LEFT, BC_WEIGHTS_RIGHT, EVAL_SPEC)
+            if data:
+                base_score = data['score']['total']
+                base_wr = data['summary'].get('vsHard')
+                print(f'实时基准评估: 起点综合分 {base_score}（{data["score"]["grade"]}） vsHard {base_wr}', flush=True)
     except Exception as e:
-        print(f'实时基准评估失败（用缓存值）: {e}', flush=True)
+        print(f'实时基准评估失败（跳过）: {e}', flush=True)
     print(f'原模型 vs hard 基准胜率: {base_wr}  综合评分: {base_score}', flush=True)
     if bc_pool is not None:
-        print(f'人类模仿样本: {len(bc_pool[0])} 条（β={BC_BETA}，每 {BC_RELOAD_EVERY} 局刷新）', flush=True)
+        print(f'人类模仿样本: 左 {bc_count(bc_pool, "left")} 条 / 右 {bc_count(bc_pool, "right")} 条（β={BC_BETA}，每 {BC_RELOAD_EVERY} 局刷新）', flush=True)
     else:
         print('暂无人像模仿样本（纯 RL 阶段，人类数据到位后自动混合）', flush=True)
 
@@ -667,97 +704,105 @@ def main():
         round_games = total_games - start_games  # 本轮局数（周期判定用，从存档继续不错乱）
         if os.path.exists(STOP_FILE):
             print('检测到停止信号，保存退出', flush=True)
-            try:
-                v = int(json.load(open(BC_WEIGHTS, encoding='utf-8')).get('version', 0)) + 1
-            except Exception:
-                v = 1
-            policy.save(BC_WEIGHTS, version=v, base_version=base_version,
-                        extra={'games': total_games, 'avgReward': round(float(np.mean(rewards[-50:])) if rewards else 0, 3),
-                               'temp': policy.temp})
+            lv = next_version(BC_WEIGHTS_LEFT)
+            rv = next_version(BC_WEIGHTS_RIGHT)
+            left_policy.save(BC_WEIGHTS_LEFT, version=lv,
+                             extra={'games': total_games, 'side': 'left',
+                                    'avgReward': round(float(np.mean(rewards_l[-50:])) if rewards_l else 0, 3),
+                                    'temp': left_policy.temp})
+            right_policy.save(BC_WEIGHTS_RIGHT, version=rv,
+                              extra={'games': total_games, 'side': 'right',
+                                     'avgReward': round(float(np.mean(rewards_r[-50:])) if rewards_r else 0, 3),
+                                     'temp': right_policy.temp})
             write_status({'state': 'stopped', 'games': total_games, 'baseWinRate': base_wr,
-                          'temp': policy.temp,
+                          'leftVersion': lv, 'rightVersion': rv, 'temp': left_policy.temp,
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
             return
-        # 对手：1/3 局打规则 AI（轮换 easy/normal/hard，对齐评估目标），
-        # 其余打延迟快照（自博弈）。
-        if round_games > 0 and round_games % 3 == 0:
-            level = ('easy', 'normal', 'hard')[(total_games // 3) % 3]
-            opponent = RuleOpp(level, seed=total_games)
-        elif (round_games > 0 and round_games % SNAP_EVERY == 0) or opponent is None:
-            opponent = policy.clone()
-        # 自博弈一局（只记录 policy 侧轨迹——对手侧样本会污染梯度）
-        winner, traj, dev = play_game(policy, opponent, seed=total_games, record_for='a')
+        # ── 一局自博弈 ──
+        # 1/3 局打规则 AI（左右交替：rule 执左 → 右策略学；rule 执右 → 左策略学）
+        # 其余左右互搏（双策略各自从自己侧轨迹学习）
+        if round_games > 0 and round_games % 6 == 0:
+            level = ('easy', 'normal', 'hard')[(total_games // 6) % 3]
+            rule = RuleOpp(level, seed=total_games)
+            winner, traj, dev = play_game(rule, right_policy, seed=total_games, record_for='b')
+        elif round_games > 0 and round_games % 3 == 0:
+            level = ('easy', 'normal', 'hard')[(total_games // 6) % 3]
+            rule = RuleOpp(level, seed=total_games)
+            winner, traj, dev = play_game(left_policy, rule, seed=total_games, record_for='a')
+        else:
+            winner, traj, dev = play_game(left_policy, right_policy, seed=total_games, record_for='both')
         total_games += 1
         devour_total[0] += dev['enemy']
         devour_total[1] += dev['self']
         if winner == 0:
-            sp_wins += 1   # 策略赢延迟快照（旧自己）→ 学习信号
+            wins_left += 1
+        elif winner == 1:
+            wins_right += 1
         # 达到目标局数 → 自动停止（优雅保存）；目标按「本轮局数」判定（从存档继续时累计不误触）
         if target_games > 0 and (total_games - start_games) >= target_games:
-            score, grade = eval_model_score(policy)
-            avg = float(np.mean(rewards[-50:])) if rewards else 0
+            score, grade = eval_model_score(left_policy, right_policy)
+            avg = float(np.mean(rewards_l[-50:] + rewards_r[-50:])) if (rewards_l or rewards_r) else 0
             append_history(total_games, score, grade, avg)
-            try:
-                v = int(json.load(open(BC_WEIGHTS, encoding='utf-8')).get('version', 0)) + 1
-            except Exception:
-                v = 1
-            policy.save(BC_WEIGHTS, version=v, base_version=base_version,
-                        extra={'games': total_games, 'avgReward': round(avg, 3),
-                               'score': score, 'grade': grade, 'targetGames': target_games,
-                               'temp': policy.temp})
+            lv = next_version(BC_WEIGHTS_LEFT)
+            rv = next_version(BC_WEIGHTS_RIGHT)
+            left_policy.save(BC_WEIGHTS_LEFT, version=lv,
+                             extra={'games': total_games, 'side': 'left', 'avgReward': round(avg, 3),
+                                    'score': score, 'grade': grade, 'targetGames': target_games,
+                                    'temp': left_policy.temp})
+            right_policy.save(BC_WEIGHTS_RIGHT, version=rv,
+                              extra={'games': total_games, 'side': 'right', 'avgReward': round(avg, 3),
+                                     'score': score, 'grade': grade, 'targetGames': target_games,
+                                     'temp': right_policy.temp})
             write_status({'state': 'stopped', 'games': total_games, 'avgReward': round(avg, 3),
                           'score': score, 'grade': grade, 'baseWinRate': base_wr, 'baseScore': base_score,
-                          'targetGames': target_games, 'temp': policy.temp,
-                          'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
-            print(f'目标局数 {target_games} 达成，自动停止。综合分 {score}（{grade}） 温度{policy.temp:.2f}', flush=True)
+                          'leftVersion': lv, 'rightVersion': rv, 'targetGames': target_games,
+                          'temp': left_policy.temp, 'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
+            print(f'目标局数 {target_games} 达成，自动停止。综合分 {score}（{grade}） 温度{left_policy.temp:.2f}', flush=True)
             return
-        # 每步即时奖励 → 折现 return-to-go（按局），入 batch
+        # 每步即时奖励 → 折现 return-to-go（按侧分账，并入各自 batch）
         if traj:
-            rs = np.array([t[3] for t in traj], dtype=np.float64)
-            rewards.append(float(rs.mean()))   # 均奖 = 本局平均每步即时奖励
-            rets = discount(rs, GAMMA)
-            for (x, slot, lp, _r, _own), ret in zip(traj, rets):
-                batch.append((x, slot, lp, ret))
+            tL = [t for t in traj if t[4] == 0]
+            tR = [t for t in traj if t[4] == 1]
+            if tL:
+                rs = np.array([t[3] for t in tL], dtype=np.float64)
+                rewards_l.append(float(rs.mean()))
+                rets = discount(rs, GAMMA)
+                for (x, slot, lp, _r, _o), ret in zip(tL, rets):
+                    batch_left.append((x, slot, lp, ret))
+            if tR:
+                rs = np.array([t[3] for t in tR], dtype=np.float64)
+                rewards_r.append(float(rs.mean()))
+                rets = discount(rs, GAMMA)
+                for (x, slot, lp, _r, _o), ret in zip(tR, rets):
+                    batch_right.append((x, slot, lp, ret))
         # 定期刷新人类模仿样本（增量吸收新对局）
         if bc_pool is not None or (round_games > 0 and round_games % BC_RELOAD_EVERY == 0):
             if round_games > 0 and round_games % BC_RELOAD_EVERY == 0:
                 new_pool = load_human_data()
                 if new_pool is not None:
                     bc_pool = new_pool
-                    print(f'  人类模仿样本刷新: {len(bc_pool[0])} 条', flush=True)
-        # 更新（每 BATCH_GAMES 局一次；RL+BC 联合，模仿的同时打分）
-        if round_games > 0 and round_games % BATCH_GAMES == 0 and batch:
-            loss = update(policy, batch, bc=bc_pool, lr=optimizer_lr)
-            batch = []
-        # 延迟快照对手
-        if round_games > 0 and round_games % SNAP_EVERY == 0:
-            opponent = policy.clone()
+                    print(f'  人类模仿样本刷新: 左 {bc_count(bc_pool, "left")} 条 / 右 {bc_count(bc_pool, "right")} 条', flush=True)
+        # 更新（每 BATCH_GAMES 局一次；左右各吃各自轨迹 + 各自人类样本）
+        if round_games > 0 and round_games % BATCH_GAMES == 0:
+            if batch_left:
+                update(left_policy, batch_left, bc=bc_pool.get('left') if bc_pool else None, lr=optimizer_lr)
+                batch_left = []
+            if batch_right:
+                update(right_policy, batch_right, bc=bc_pool.get('right') if bc_pool else None, lr=optimizer_lr)
+                batch_right = []
         # 定期评估 + 保存
         if round_games > 0 and round_games % EVAL_EVERY == 0:
-            score, grade = eval_model_score(policy)
-            avg = float(np.mean(rewards[-EVAL_EVERY:])) if rewards else 0
-            # ── 行为变化诊断（每 200 局）：argmax 决策 vs base 的差异率 ──
-            # 分数由 argmax 评估决定；权重在动 ≠ 行为在变，这个指标直接显示决策层变化
+            score, grade = eval_model_score(left_policy, right_policy)
+            avg = float(np.mean(rewards_l[-EVAL_EVERY:] + rewards_r[-EVAL_EVERY:])) if (rewards_l or rewards_r) else 0
+            # ── 行为变化诊断（每 200 局）：argmax 决策 vs base 的差异率（左右各自）──
             if round_games > 0 and round_games % 200 == 0:
-                from rules import AimGame
-                same = diff = 0
-                for _ in range(12):
-                    g = AimGame(limit=16); guard = 0
-                    while g.winner is None and guard < 300:
-                        guard += 1
-                        a1, _ = base_ref.act(g, sample=False)
-                        a2, _ = policy.act(g, sample=False)
-                        if a1 == a2: same += 1
-                        else: diff += 1
-                        r = g.apply_action(g.turn, a1, defer_roll=True)
-                        if not r['ok']: break
-                        while g.has_pending_roll:
-                            if g.roll_step_once(g.turn) is None: g.clear_pending_roll(); break
-                div = diff / (same + diff) * 100 if (same + diff) else 0
-                print(f'  行为诊断: argmax 决策差异率 {div:.1f}%（vs base）', flush=True)
-            print(f'[{total_games}局] 均奖 {avg:.2f} 综合分 {score}（{grade}） 温度{policy.temp:.2f} 吞敌{devour_total[0]} 吞己{devour_total[1]} 自博弈胜率{sp_wins/max(1, round_games)*100:.0f}% 耗时{(time.time()-t0)/60:.1f}m', flush=True)
+                dl = decision_diff(left_policy, base_ref_left)
+                dr = decision_diff(right_policy, base_ref_right)
+                print(f'  行为诊断: 左策略 diff {dl:.1f}% / 右策略 diff {dr:.1f}%（vs base）', flush=True)
+            sp = round_games
+            print(f'[{total_games}局] 均奖 L {float(np.mean(rewards_l[-50:])) if rewards_l else 0:.2f} / R {float(np.mean(rewards_r[-50:])) if rewards_r else 0:.2f} 综合分 {score}（{grade}） 温度{left_policy.temp:.2f} 吞敌{devour_total[0]} 吞己{devour_total[1]} 互搏胜率 L{wins_left/max(1, sp)*100:.0f}% R{wins_right/max(1, sp)*100:.0f}% 耗时{(time.time()-t0)/60:.1f}m', flush=True)
             append_history(total_games, score, grade, avg)  # 波形图历史（综合得分）
-            # ── 自适应探索：分数平台期 → 提高采样温度激发新行为（牢大定）──
+            # ── 自适应探索：分数平台期 → 提高采样温度激发新行为（左右共享温度）──
             if score is not None:
                 score_window.append(score)
                 if len(score_window) > PLATEAU_WINDOW:
@@ -769,29 +814,33 @@ def main():
                     else:
                         plateau_count = 0    # 分数在动，恢复正常温度
                 new_temp = min(TEMP_BASE + TEMP_STEP * plateau_count, TEMP_MAX)
-                if new_temp != policy.temp:
-                    print(f'  自适应探索：温度 {policy.temp:.2f} → {new_temp:.2f}（平台档 {plateau_count}）', flush=True)
-                    policy.temp = new_temp
-            try:
-                v = int(json.load(open(BC_WEIGHTS, encoding='utf-8')).get('version', 0)) + 1
-            except Exception:
-                v = 1
-            policy.save(BC_WEIGHTS, version=v, base_version=base_version,
-                        extra={'games': total_games, 'avgReward': round(avg, 3),
-                               'score': score, 'grade': grade, 'temp': policy.temp})
+                if new_temp != left_policy.temp:
+                    print(f'  自适应探索：温度 {left_policy.temp:.2f} → {new_temp:.2f}（平台档 {plateau_count}）', flush=True)
+                    left_policy.temp = right_policy.temp = new_temp
+            lv = next_version(BC_WEIGHTS_LEFT)
+            rv = next_version(BC_WEIGHTS_RIGHT)
+            left_policy.save(BC_WEIGHTS_LEFT, version=lv,
+                             extra={'games': total_games, 'side': 'left', 'avgReward': round(avg, 3),
+                                    'score': score, 'grade': grade, 'temp': left_policy.temp})
+            right_policy.save(BC_WEIGHTS_RIGHT, version=rv,
+                              extra={'games': total_games, 'side': 'right', 'avgReward': round(avg, 3),
+                                     'score': score, 'grade': grade, 'temp': right_policy.temp})
             write_status({'state': 'running', 'games': total_games, 'avgReward': round(avg, 3),
-                          'score': score, 'grade': grade, 'rlVersion': v,
-                          'baseVersion': base_version, 'baseWinRate': base_wr, 'baseScore': base_score,
-                          'temp': policy.temp,
-                          'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
+                          'score': score, 'grade': grade, 'rlVersion': lv,
+                          'leftVersion': lv, 'rightVersion': rv, 'baseWinRate': base_wr, 'baseScore': base_score,
+                          'temp': left_policy.temp, 'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
         elif round_games > 0 and round_games % SAVE_EVERY == 0:
-            try:
-                v = int(json.load(open(BC_WEIGHTS, encoding='utf-8')).get('version', 0)) + 1
-            except Exception:
-                v = 1
-            write_status({'state': 'running', 'games': total_games,
-                          'avgReward': round(float(np.mean(rewards[-SAVE_EVERY:])) if rewards else 0, 3),
-                          'rlVersion': v, 'baseVersion': base_version,
+            lv = next_version(BC_WEIGHTS_LEFT)
+            rv = next_version(BC_WEIGHTS_RIGHT)
+            avg = float(np.mean(rewards_l[-SAVE_EVERY:] + rewards_r[-SAVE_EVERY:])) if (rewards_l or rewards_r) else 0
+            left_policy.save(BC_WEIGHTS_LEFT, version=lv,
+                             extra={'games': total_games, 'side': 'left', 'avgReward': round(avg, 3),
+                                    'temp': left_policy.temp})
+            right_policy.save(BC_WEIGHTS_RIGHT, version=rv,
+                              extra={'games': total_games, 'side': 'right', 'avgReward': round(avg, 3),
+                                     'temp': right_policy.temp})
+            write_status({'state': 'running', 'games': total_games, 'avgReward': round(avg, 3),
+                          'rlVersion': lv, 'leftVersion': lv, 'rightVersion': rv,
                           'baseWinRate': base_wr, 'baseScore': base_score,
                           'ts': time.strftime('%Y-%m-%d %H:%M:%S')})
 
