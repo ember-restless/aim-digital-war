@@ -428,21 +428,26 @@ function doProduce(state, owner, i) {
     state.lastAction = { type: 'produce', j, attacked: true, owner };
   } else {
     // 空地/我方单位 → +1
+    let inserted = false;
     if (t.v === 9) {
-      // 9+1=10 → [1][0]
+      // 9+1=10 → [1][0]：十位1留在原格，个位0空地插到右侧（与拆分同构：产物固定插索引+1）
       t.v = 1;
       t.o = owner;
-      if (j + dir < cells.length) {
-        // 个位0空地放前方？这里简化：10占两格需要+1格
-        // —— 简化处理：9+1 变成 1，前方不插（待定）
+      const ins = j + 1;
+      if (ins >= 0 && ins <= cells.length && cells.length < state.map.limit) {
+        cells.splice(ins, 0, newCell({ v: 0, o: null }));
+        inserted = true;
+        state.log.push('造兵：9+1=10 → [1][0]（插入个位0空地）');
+      } else {
+        state.log.push('造兵：9+1 满格 → 只保留十位1');
       }
     } else {
       t.v += 1;
       t.o = owner;
+      state.log.push(`造兵：基地前${t.v - 1} → ${t.v}`);
     }
-    state.log.push(`造兵：基地前${t.v - 1} → ${t.v}`);
     state.lastSeq++;
-    state.lastAction = { type: 'produce', j, attacked: false, newV: t.v, owner };
+    state.lastAction = { type: 'produce', j, attacked: false, newV: t.v, inserted, owner };
   }
   state.stats.produce[owner]++;
   return true;

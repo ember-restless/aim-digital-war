@@ -895,11 +895,26 @@ class TutEngine extends ChangeNotifierWrapper {
       lastSeq++;
       lastAction = {'type': 'produce', 'j': j, 'attacked': true, 'owner': 0};
     } else {
-      t.v += 1;
-      t.o = 0;
-      _log('造兵：基地前${t.v - 1} → ${t.v}');
+      bool inserted = false;
+      if (t.v == 9) {
+        // 9+1=10 → [1][0]：十位1留在原格，个位0空地插到右侧（与拆分同构：产物固定插索引+1）
+        t.v = 1;
+        t.o = 0;
+        final ins = j + 1;
+        if (ins >= 0 && ins <= cells.length && cells.length < limit) {
+          cells.insert(ins, TutCell(0));
+          inserted = true;
+          _log('造兵：9+1=10 → [1][0]（插入个位0空地）');
+        } else {
+          _log('造兵：9+1 满格 → 只保留十位1');
+        }
+      } else {
+        t.v += 1;
+        t.o = 0;
+        _log('造兵：基地前${t.v - 1} → ${t.v}');
+      }
       lastSeq++;
-      lastAction = {'type': 'produce', 'j': j, 'attacked': false, 'newV': t.v, 'owner': 0};
+      lastAction = {'type': 'produce', 'j': j, 'attacked': false, 'newV': t.v, 'inserted': inserted, 'owner': 0};
     }
   }
 

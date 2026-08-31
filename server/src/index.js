@@ -6,202 +6,194 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
-const { spawn } = require('child_process');
 const { Server } = require('socket.io');
 const { RoomGame } = require('./game/RoomGame');
+
+// ── αβ 剪枝 AI（战斗测试：人机/AI 对战）──
+const abRules = require('./game/rules');
+const { AlphaBetaAi, candidates, applyAndRoll, sideValue } = require('./game/ab_ai');
+
+function abGameToJson(s) {
+  return {
+    cells: s.map.cells.map((c) => ({
+      v: c.v, o: c.o === undefined ? null : c.o,
+      bridge: !!c.bridge, onBridge: !!c.onBridge, auto: !!c.auto,
+      pressedV: c.pressedV === undefined ? null : c.pressedV,
+      pressedO: c.pressedO === undefined ? null : c.pressedO,
+    })),
+    turn: s.turn, phase: s.phase, points: s.points, produceLeft: s.produceLeft,
+    turnCount: s.turnCount, winner: s.winner === undefined ? null : s.winner,
+    limit: s.map.limit,
+  };
+}
+
+function abJsonToGame(j) {
+  const s = abRules.createGame({ limit: (j && j.limit) || 16 });
+  s.map.cells = (j.cells || []).map((c) => ({
+    v: c.v, o: c.o === null || c.o === undefined ? null : c.o,
+    bridge: !!c.bridge, onBridge: !!c.onBridge, auto: !!c.auto,
+    pressedV: c.pressedV === null || c.pressedV === undefined ? null : c.pressedV,
+    pressedO: c.pressedO === null || c.pressedO === undefined ? null : c.pressedO,
+  }));
+  s.turn = j.turn; s.phase = j.phase; s.points = j.points || 0;
+  s.produceLeft = j.produceLeft || 0; s.turnCount = j.turnCount || 0;
+  s.winner = j.winner === undefined ? null : j.winner;
+  return s;
+}
+
+function abActDesc(owner, a, g) {
+  const t = a.type;
+  const tag = 'P' + owner;
+  if (t === 'endTurn') return tag + ' 结束回合';
+  if (t === 'choosePhase') return tag + ' 选择阶段 ' + a.phase;
+  const i = a.i !== undefined ? a.i : -1;
+  const v = (i >= 0 && i < g.map.cells.length) ? g.map.cells[i].v : '?';
+  const d = owner === 0 ? '右' : '左';
+  if (t === 'move') return `${tag} 单位@${i}(${v}) 向${d}走${a.steps !== undefined ? a.steps : 1}格`;
+  if (t === 'attack') {
+    const j = a.j !== undefined ? a.j : -1;
+    const tv = (j >= 0 && j < g.map.cells.length) ? g.map.cells[j].v : '?';
+    return `${tag} 单位@${i}(${v}) 攻击 @${j}(${tv})`;
+  }
+  if (t === 'devour') {
+    const j = a.j !== undefined ? a.j : -1;
+    const tv = (j >= 0 && j < g.map.cells.length) ? g.map.cells[j].v : '?';
+    return `${tag} 单位@${i}(${v}) 吞噬 @${j}(${tv}) → ${v + tv}`;
+  }
+  if (t === 'split') return `${tag} 单位@${i}(${v}) 拆分为 ${a.a}+${a.b}`;
+  if (t === 'produce') return `${tag} 基地@${i}(8) 造兵`;
+  return tag + ' ' + JSON.stringify(a);
+}
+
+function abMakeAi(name, depth, tb) {
+  if (name === 'ab') return new AlphaBetaAi({ depth: depth || 5, timeBudgetMs: tb !== undefined ? tb : 1500 });
+  // 规则 AI（easy/normal/hard）：JS 简易启发式
+  return { name, decide: (s) => abRuleDecide(s, name) };
+}
+
+// 简易 JS 规则 AI（对应客户端 ai.dart 的 easy/normal/hard 简化版）
+function abRuleDecide(state, level) {
+  const owner = state.turn;
+  const [playable] = candidates(state); // 含手动补的 produce（防拆基地）
+  if (playable.length === 0) return { type: 'endTurn' };
+  if (level === 'easy') {
+    return playable[Math.floor(Math.random() * playable.length)];
+  }
+  playable.sort((x, y) => abRuleScore(state, owner, y) - abRuleScore(state, owner, x));
+  return playable[0];
+}
+
+function abRuleScore(state, owner, a) {
+  const t = a.type;
+  let s = 0;
+  const cells = state.map.cells;
+  if (t === 'attack') {
+    const j = a.j;
+    const tv = cells[j] ? cells[j].v : 0;
+    s = tv * 2 + (tv === 8 ? 120 : 0) + (tv === 9 ? 200 : 0) + (tv === 7 ? 60 : 0);
+    if (tv <= (a.v >= 4 ? a.v : 1)) s += 150;
+  } else if (t === 'devour') {
+    const j = a.j;
+    const tv = cells[j] ? cells[j].v : 0;
+    const total = (cells[a.i] ? cells[a.i].v : 0) + tv;
+    s = (total >= 9 ? 400 : total === 8 ? 250 : total >= 6 ? 120 : 0) + (cells[j] && cells[j].o !== owner ? tv * 4 : 0);
+  } else if (t === 'move') {
+    s = 10 + (owner === 0 ? a.i : cells.length - 1 - a.i) * 2;
+  } else if (t === 'produce') {
+    s = 8;
+  } else if (t === 'split') {
+    s = -40;
+  }
+  return s;
+}
+
+function abSendJson(res, data) {
+  const body = JSON.stringify(data);
+  res.writeHead(200, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Access-Control-Allow-Origin': '*',
+    'Cache-Control': 'no-store',
+  });
+  res.end(body);
+}
+
+function abReadBody(req, cb) {
+  let data = '';
+  req.on('data', (c) => { data += c; if (data.length > 1e6) req.destroy(); });
+  req.on('end', () => {
+    try { cb(JSON.parse(data || '{}')); } catch (e) { cb({}); }
+  });
+}
+
+function handleAbApi(pathname, req, res) {
+  console.error(`[ab-api] ${new Date().toISOString()} ${req.method} ${pathname} from ${req.socket.remoteAddress}`);
+  if (pathname === '/api/ab/new') {
+    const st = abGameToJson(abRules.createGame({ limit: 16 }));
+    st._ver = 'AB-V3-1300';
+    abSendJson(res, st);
+    return;
+  }
+  if (pathname === '/api/ab/legal' && req.method === 'POST') {
+    abReadBody(req, (body) => {
+      try {
+        const g = abJsonToGame(body.state);
+        const owner = g.turn;
+        const [acts, mustEnd] = candidates(g);
+        const out = acts.map((a) => ({ action: a, desc: abActDesc(owner, a, g) }));
+        abSendJson(res, { ok: true, owner, actions: out, mustEnd: mustEnd || acts.length === 0, state: abGameToJson(g) });
+      } catch (e) { abSendJson(res, { ok: false, msg: 'legal 失败: ' + e.message }); }
+    });
+    return;
+  }
+  if (pathname === '/api/ab/act' && req.method === 'POST') {
+    abReadBody(req, (body) => {
+      try {
+        const g = abJsonToGame(body.state);
+        const owner = g.turn;
+        const ok = applyAndRoll(g, owner, body.action);
+        if (!ok) { abSendJson(res, { ok: false, msg: '操作不合法', state: body.state }); return; }
+        const desc = abActDesc(owner, body.action, g);
+        let aiResp = null;
+        const aiSide = body.ai_side;
+        if (aiSide !== undefined && aiSide !== null && !g.winner && g.turn === aiSide) {
+          const ai = abMakeAi(body.ai || 'ab', body.depth, body.tb);
+          const a2 = ai.decide(g);
+          if (a2) {
+            const ok2 = applyAndRoll(g, aiSide, a2);
+            aiResp = { action: a2, desc: abActDesc(aiSide, a2, g), ok: ok2 };
+          }
+        }
+        abSendJson(res, { ok: true, state: abGameToJson(g), desc, ai: aiResp });
+      } catch (e) { abSendJson(res, { ok: false, msg: 'act 失败: ' + e.message }); }
+    });
+    return;
+  }
+  if (pathname === '/api/ab/ai_act' && req.method === 'POST') {
+    abReadBody(req, (body) => {
+      try {
+        const g = abJsonToGame(body.state);
+        const owner = g.turn;
+        const ai = abMakeAi(body.ai || 'ab', body.depth, body.tb);
+        const a = ai.decide(g);
+        const ok = a && applyAndRoll(g, owner, a);
+        abSendJson(res, {
+          ok: !!ok, action: ok ? a : null,
+          desc: ok ? abActDesc(owner, a, g) : '无动作',
+          state: abGameToJson(g), winner: g.winner,
+        });
+      } catch (e) { abSendJson(res, { ok: false, msg: 'ai_act 失败: ' + e.message }); }
+    });
+    return;
+  }
+  abSendJson(res, { ok: false, msg: 'unknown ab api' });
+}
+
 
 const DOWNLOAD_PORT = 5000;
 const DOWNLOAD_DIR = path.join(__dirname, '..', 'public', 'downloads');
 const CFG = require('./config.js');
 const VERSION = CFG.APP_VERSION;
 
-// ── AI 训练场统计（训练数据局数/步数/模型版本）──
-let trainStatsCache = null;
-
-// RL 状态实时读（RL 进程独立写文件，不能走缓存）
-function readRl() {
-  let rl = null;
-  try {
-    const rf = path.join(__dirname, '..', '..', 'train_data', 'rl_status.json');
-    if (fs.existsSync(rf)) rl = JSON.parse(fs.readFileSync(rf, 'utf8'));
-    if (rl && rlProcess && rlProcess.exitCode === null && rl.state !== 'running') rl.state = 'running';
-  } catch (_) {}
-  return rl;
-}
-function readRlHistory() {
-  let h = [];
-  try {
-    const hf = path.join(__dirname, '..', '..', 'train_data', 'rl_history.jsonl');
-    if (fs.existsSync(hf)) {
-      h = fs.readFileSync(hf, 'utf8').trim().split('\n').filter(Boolean)
-        .map(l => { try { return JSON.parse(l); } catch (_) { return null; } })
-        .filter(Boolean);
-    }
-  } catch (_) {}
-  return h;
-}
-
-function readEvalInfo() {
-  let e = null;
-  try {
-    const ef = path.join(__dirname, '..', '..', 'train_data', 'eval_result.json');
-    if (fs.existsSync(ef)) e = JSON.parse(fs.readFileSync(ef, 'utf8'));
-  } catch (_) {}
-  return e;
-}
-
-function trainStats() {
-  // 模型版本/更新时间：每次实时读权重文件——手动部署/回滚/训练后立即反映，
-  // 不依赖缓存失效（否则监视台显示旧版本误导）
-  // 左右 AI 独立权重：train_weights_left.json / train_weights_right.json
-  function readWeights(name) {
-    const wf = path.join(DOWNLOAD_DIR, name);
-    try {
-      if (fs.existsSync(wf)) {
-        const w = JSON.parse(fs.readFileSync(wf, 'utf8'));
-        return { v: w.version || 1, ts: w.updatedAt || null };
-      }
-    } catch (_) {}
-    return { v: 0, ts: null };
-  }
-  const L = readWeights('train_weights_left.json');
-  const R = readWeights('train_weights_right.json');
-  // 兼容旧字段 modelVersion（单权重时期），新增 left/right 字段
-  const modelVersion = L.v, modelUpdatedAt = L.ts;
-  if (trainStatsCache) {
-    // 静态部分走缓存，RL 状态/历史 + 模型评估 + 版本实时读（eval 曾被缓存成旧值误导监视台）
-    return { ...trainStatsCache, modelVersion, modelUpdatedAt,
-             leftVersion: L.v, leftUpdatedAt: L.ts,
-             rightVersion: R.v, rightUpdatedAt: R.ts,
-             rl: readRl(), rlHistory: readRlHistory(), eval: readEvalInfo() };
-  }
-  let games = 0, steps = 0;
-  let aiGames = 0, aiWins = 0;
-  let aiGamesL = 0, aiWinsL = 0, aiGamesR = 0, aiWinsR = 0; // 左右策略各自的战绩（AI 执左=人类打右）
-  const pvpSeries = []; // 与真人对局序列：{n, aiWin}（n=局序，aiWin=AI 是否获胜）
-  const gameTs = [];    // 每局时间戳（数据量趋势用，最多 500 条防 payload 膨胀）
-  const dataFile = path.join(__dirname, '..', '..', 'train_data', 'games.jsonl');
-  try {
-    if (fs.existsSync(dataFile)) {
-      const raw = fs.readFileSync(dataFile, 'utf8').trim();
-      // 空文件 → 0 局（直接 split 会得到 [''] 数成 1）
-      const lines = raw ? raw.split('\n') : [];
-      games = lines.length;
-      let seq = 0;
-      for (const l of lines) {
-        try {
-          const g = JSON.parse(l);
-          steps += (g.steps || []).length;
-          if (g.ts) {
-            gameTs.push({ ts: g.ts, side: humanSide });
-            if (gameTs.length > 500) gameTs.shift();
-          }
-          // 从第一步的人类 owner 推断人类所在侧，算 AI 胜负（side 供监视台左右分离）
-          const st = g.steps || [];
-          const humanSide = st.length ? (st[0].owner ?? -1) : -1;
-          // 只统计「人类 vs AI」对局（训练场单人/本地记录）：联机/双人真人对局 vsAi=false，不算 AI 胜率
-          if ((g.vsAi !== false) && (humanSide === 0 || humanSide === 1)) {
-            seq++;
-            const aiWin = (humanSide === 0 && g.winner === 1) || (humanSide === 1 && g.winner === 0);
-            aiGames++;
-            if (aiWin) aiWins++;
-            pvpSeries.push({ n: seq, aiWin: aiWin ? 1 : 0, side: humanSide });
-            // 左右各自的 AI 胜率（人类打左 → AI 执右 → 记右策略战绩；反之记左策略）
-            if (humanSide === 0) { aiGamesR++; if (aiWin) aiWinsR++; }
-            else { aiGamesL++; if (aiWin) aiWinsL++; }
-          }
-        } catch (_) {}
-      }
-    }
-  } catch (_) {}
-  // 模型版本：实时读（上面已读，见函数开头——每次调用刷新）
-  // 模型实力评估结果（监视台展示：vs easy/normal/hard 胜率等）——实时读
-  const evalInfo = readEvalInfo();
-  trainStatsCache = {
-    games, steps, modelVersion, modelUpdatedAt,
-    leftVersion: L.v, leftUpdatedAt: L.ts, rightVersion: R.v, rightUpdatedAt: R.ts,
-    training, evaluating, lastTrainAt, eval: evalInfo,
-    rl: readRl(), rlHistory: readRlHistory(),
-    // 与真人对局：AI 场次/胜场/胜率 + 每局序列（折线图）
-    aiGames, aiWins,
-    aiWinRate: aiGames ? Math.round((aiWins / aiGames) * 1000) / 1000 : 0,
-    // 左右各自战绩：aiGamesL/aiWinsL = AI 执左（人类打右）；aiGamesR/aiWinsR = AI 执右（人类打左）
-    aiL: { games: aiGamesL, wins: aiWinsL, rate: aiGamesL ? Math.round((aiWinsL / aiGamesL) * 1000) / 1000 : 0 },
-    aiR: { games: aiGamesR, wins: aiWinsR, rate: aiGamesR ? Math.round((aiWinsR / aiGamesR) * 1000) / 1000 : 0 },
-    pvpSeries,
-    // 数据量趋势：最近对局时间戳（原始字符串，monitor 自己聚合）
-    gameTs,
-  };
-  return trainStatsCache;
-}
-
-// ── 自动训练（在线学习）：有新对局就后台训练，训完自动部署权重 ──
-// 节流：两次训练间隔 ≥ TRAIN_MIN_GAP；训练期间的来数据 → 训练完再补训一次（合并）
-const TRAIN_MIN_GAP = 30 * 1000; // 30s 最小间隔（防连续对局训练风暴）
-let training = false;
-let pendingTrain = false;
-let evaluating = false;
-let rlProcess = null; // 自博弈 RL 进程（detached）
-let lastTrainAt = null;
-
-function triggerTrain() {
-  // 2026-08-28：纯 BC 自动训练停用——改为常驻 BC+RL 混合进程（train_hybrid.py）：
-  // 自博弈打分 + 人类数据模仿联合训练，自行定期 reload games.jsonl 增量吸收新对局。
-  // 权重由 hybrid 进程直接部署，这里若再训会造成双写冲突。
-  return;
-  if (training) { pendingTrain = true; return; }
-  if (lastTrainAt && Date.now() - lastTrainAt < TRAIN_MIN_GAP) { pendingTrain = true; return; }
-  // 没有数据就不训
-  const dataFile = path.join(__dirname, '..', '..', 'train_data', 'games.jsonl');
-  if (!fs.existsSync(dataFile)) return;
-  training = true;
-  const logPath = path.join(__dirname, '..', '..', 'train', 'train.log');
-  const out = fs.openSync(logPath, 'a');
-  const started = Date.now();
-  fs.writeSync(out, `\n===== 自动训练 ${new Date().toISOString()} =====\n`);
-  const p = spawn('python3', ['/root/aim/train/train_bc.py', '--deploy', '--epochs', '40'],
-    { cwd: '/root/aim', stdio: ['ignore', out, out] });
-  p.on('close', (code) => {
-    try { fs.closeSync(out); } catch (_) {}
-    training = false;
-    lastTrainAt = Date.now();
-    trainStatsCache = null; // 统计缓存失效（版本号已变）
-    console.log(`[train] 训练结束 code=${code} 耗时=${((Date.now() - started) / 1000).toFixed(1)}s`);
-    // 训练部署完成 → 自动评估模型实力（新权重存在才评）
-    if (code === 0) triggerEval();
-    if (pendingTrain) { pendingTrain = false; triggerTrain(); }
-  });
-  p.on('error', () => {
-    try { fs.closeSync(out); } catch (_) {}
-    training = false;
-    lastTrainAt = Date.now();
-  });
-}
-
-// 模型实力评估：左右互搏 + 能力考试（牢大定：vs easy/normal/hard 胜率不算指标），结果落盘 eval_result.json
-function triggerEval() {
-  if (evaluating) return;
-  // 左右独立权重：至少一侧存在才评（eval_model.py 双权重读取，缺侧回退）
-  const wfL = path.join(DOWNLOAD_DIR, 'train_weights_left.json');
-  if (!fs.existsSync(wfL)) return; // 无权重不评
-  evaluating = true;
-  const logPath = path.join(__dirname, '..', '..', 'train', 'train.log');
-  const out = fs.openSync(logPath, 'a');
-  const started = Date.now();
-  fs.writeSync(out, `\n===== 模型评估 ${new Date().toISOString()} =====\n`);
-  const p = spawn('python3', ['/root/aim/train/eval_model.py', '--duel', '12'],
-    { cwd: '/root/aim', stdio: ['ignore', out, out] });
-  p.on('close', (code) => {
-    try { fs.closeSync(out); } catch (_) {}
-    evaluating = false;
-    trainStatsCache = null; // 评估结果缓存失效
-    console.log(`[eval] 评估结束 code=${code} 耗时=${((Date.now() - started) / 1000).toFixed(1)}s`);
-  });
-  p.on('error', () => {
-    try { fs.closeSync(out); } catch (_) {}
-    evaluating = false;
-  });
-}
 
 // ---------- 游戏服务器（Socket.io 挂到单端口 server，定义在后面） ----------
 const io = new Server({ cors: { origin: '*' } });
@@ -311,22 +303,6 @@ io.on('connection', (socket) => {
       password ? String(password).slice(0, 12) : null,
       title ? String(title).slice(0, 16) : null);
     room.allowOwnRollerAttack = allowOwnRollerAttack !== false; // 规则开关：默认开（保持「敌我皆可」）
-    // 真人对局记录：双方棋谱写训练数据，自动训练吸收（牢大定：AI 都学）
-    room.onRecorded = (data) => {
-      try {
-        const dir = path.join(__dirname, '..', '..', 'train_data');
-        fs.mkdirSync(dir, { recursive: true });
-        fs.appendFileSync(path.join(dir, 'games.jsonl'),
-          JSON.stringify({ v: VERSION, winner: data.winner, turns: data.turns,
-                           limit: data.limit, steps: data.steps,
-                           vsAi: false, // 联机真人对局：不计入 AI 胜率统计
-                           ts: Date.now() }) + '\n');
-        trainStatsCache = null;
-        triggerTrain();
-      } catch (e) {
-        console.error('记录联机对局失败:', e);
-      }
-    };
     if (side === 'right') room.setHostSide('right');
     const idx = room.isHotseat() ? 0 : (side === 'right' ? 1 : 0);
     const res = room.addPlayer(socket.id, name, idx);
@@ -729,138 +705,9 @@ const dlServer = http.createServer((req, res) => {
     });
     return;
   }
-  // ── AI 训练场：对局数据上传（JSONL 落盘，供行为克隆训练）──
-  if (pathname === '/api/train/upload') {
-    let body = '';
-    req.on('data', d => { body += d; if (body.length > 2 * 1024 * 1024) req.destroy(); });
-    req.on('end', () => {
-      try {
-        const b = JSON.parse(body || '{}');
-        if (!b.steps || !Array.isArray(b.steps) || b.steps.length === 0) {
-          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({ ok: false, msg: 'empty steps' }));
-          return;
-        }
-        const dir = path.join(__dirname, '..', '..', 'train_data');
-        fs.mkdirSync(dir, { recursive: true });
-        const line = JSON.stringify({
-          v: VERSION,
-          winner: b.winner,
-          turns: b.turns,
-          limit: b.limit,
-          steps: b.steps,
-          vsAi: b.vsAi !== false, // 训练场单人=打 AI（计入 AI 胜率）；双人真人对局=false
-          ts: Date.now(),
-        });
-        fs.appendFileSync(path.join(dir, 'games.jsonl'), line + '\n');
-        // 统计缓存失效 + 触发异步训练（在线学习：有数据就训，训完自动部署权重）
-        trainStatsCache = null;
-        triggerTrain();
-        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ ok: true }));
-      } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ ok: false, msg: 'bad json' }));
-      }
-    });
-    return;
-  }
-  // ── AI 训练场：统计（对局数 / 步数 / 模型版本）──
-  if (pathname === '/api/train/stats') {
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify(trainStats()));
-    return;
-  }
-  // ── 自博弈强化学习：启动（后台进程，以最新 BC 权重为基；body 可带 games=目标局数）──
-  if (pathname === '/api/train/rl/start') {
-    if (rlProcess && rlProcess.exitCode === null) {
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: true, msg: '已在运行' }));
-      return;
-    }
-    // 读 body（可带 games 目标局数）
-    let body = '';
-    req.on('data', d => { body += d; if (body.length > 4096) req.destroy(); });
-    req.on('end', () => {
-      let rlGames = 0;
-      try {
-        const b = JSON.parse(body || '{}');
-        rlGames = parseInt(b.games, 10) || 0;
-      } catch (_) {}
-      const stopFile = path.join(__dirname, '..', '..', 'train', 'rl_stop');
-      try { if (fs.existsSync(stopFile)) fs.unlinkSync(stopFile); } catch (_) {}
-      const logPath = path.join(__dirname, '..', '..', 'train', 'rl.log');
-      const out = fs.openSync(logPath, 'a');
-      fs.writeSync(out, `\n===== RL 启动 ${new Date().toISOString()} 目标局数=${rlGames || '无限'} =====\n`);
-      const args = ['/root/aim/train/rl_selfplay.py'];
-      if (rlGames > 0) args.push('--games', String(rlGames));
-      rlProcess = spawn('python3', args,
-        { cwd: '/root/aim', stdio: ['ignore', out, out], detached: true });
-      rlProcess.unref(); // 服务器重启不杀 RL
-      rlProcess.on('close', () => { rlProcess = null; });
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: true, msg: 'RL 已启动' + (rlGames ? '（目标 ' + rlGames + ' 局）' : '') }));
-    });
-    return;
-  }
-  // ── 自博弈强化学习：停止（优雅退出）──
-  if (pathname === '/api/train/rl/stop') {
-    const stopFile = path.join(__dirname, '..', '..', 'train', 'rl_stop');
-    try { fs.writeFileSync(stopFile, 'stop'); } catch (_) {}
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: true, msg: 'RL 停止中（保存后退出）' }));
-    return;
-  }
-  // ── 自博弈强化学习：部署 RL 权重为游戏 AI（手动按钮）──
-  if (pathname === '/api/train/rl/deploy') {
-    const rlFile = path.join(DOWNLOAD_DIR, 'train_weights_rl.json');
-    const mainFile = path.join(DOWNLOAD_DIR, 'train_weights.json');
-    if (!fs.existsSync(rlFile)) {
-      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: false, msg: '没有 RL 权重（先跑完一次 RL）' }));
-      return;
-    }
-    try {
-      const rl = JSON.parse(fs.readFileSync(rlFile, 'utf8'));
-      // 版本号接续主权重 +1，标记来源 RL
-      let ver = 1;
-      try {
-        if (fs.existsSync(mainFile)) {
-          ver = (JSON.parse(fs.readFileSync(mainFile, 'utf8')).version || 0) + 1;
-        }
-      } catch (_) {}
-      rl.version = ver;
-      rl.updatedAt = new Date().toISOString().replace('T', ' ').slice(0, 19);
-      rl.rlDeployed = true;
-      rl.rlSourceVersion = rl.rlVersion || null;
-      fs.writeFileSync(mainFile, JSON.stringify(rl));
-      trainStatsCache = null;
-      console.log(`[rl] RL 权重已部署为游戏 AI（v${ver}）`);
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: true, msg: '已部署（v' + ver + '）', version: ver }));
-    } catch (e) {
-      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: false, msg: '部署失败: ' + e.message }));
-    }
-    return;
-  }
-  // ── AI 训练场：训练日志尾部（监视台用）──
-  if (pathname === '/api/train/log') {
-    let log = '';
-    const logFile = path.join(__dirname, '..', '..', 'train', 'train.log');
-    try {
-      if (fs.existsSync(logFile)) {
-        const size = fs.statSync(logFile).size;
-        const start = Math.max(0, size - 8192); // 尾部 8KB
-        const fd = fs.openSync(logFile, 'r');
-        const buf = Buffer.alloc(size - start);
-        fs.readSync(fd, buf, 0, buf.length, start);
-        fs.closeSync(fd);
-        log = buf.toString('utf8');
-      }
-    } catch (_) {}
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ log }));
+  // ── αβ 战斗测试 API（同源 5000，人机/AI 对战）──
+  if (pathname.startsWith('/api/ab/')) {
+    handleAbApi(pathname, req, res);
     return;
   }
   let url = decodeURIComponent(req.url.split('?')[0]);
@@ -884,10 +731,16 @@ const dlServer = http.createServer((req, res) => {
     // gzip：web 资源（js/wasm 等）压缩后体积大减；已压缩格式（apk/png/zip）跳过
     const COMPRESSIBLE = ['.js', '.wasm', '.json', '.html', '.css', '.data', '.otf', '.ttf', '.txt', '.svg', '.map'];
     const wantGzip = COMPRESSIBLE.includes(ext) && (req.headers['accept-encoding'] || '').includes('gzip');
-    // 缓存：web 构建产物（除 index.html）允许缓存 1 天，避免每次刷新全量重下 40MB
+    // 缓存：web 构建产物（除 index.html）允许缓存 1 天，避免每次刷新全量重下 40MB。
+    // 2026-08-28 修复：入口 JS 不带 hash（main.dart.js/flutter_bootstrap.js/service worker），
+    // 若也长缓存，部署新构建后浏览器永远拿到旧版 JS——前瞻等更新全被缓存吞掉！
+    // 入口文件每次刷新取新（no-store），其余带 hash 的资源（assets/）内容不可变，可长缓存。
     const inWeb = file.startsWith(path.join(DOWNLOAD_DIR, 'web'));
-    const isIndex = path.basename(file) === 'index.html';
-    const cacheControl = inWeb && !isIndex ? 'public, max-age=86400' : 'no-store, no-cache, must-revalidate';
+    const base = path.basename(file);
+    const ENTRY_FILES = ['index.html', 'main.dart.js', 'flutter_bootstrap.js',
+                         'flutter.js', 'flutter_service_worker.js', 'manifest.json'];
+    const isEntry = inWeb && ENTRY_FILES.includes(base);
+    const cacheControl = inWeb && !isEntry ? 'public, max-age=86400' : 'no-store, no-cache, must-revalidate';
     const headers = {
       'Content-Type': mime[ext] || 'application/octet-stream',
       'Content-Disposition': ['.apk', '.zip', '.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext) ? 'attachment' : 'inline',

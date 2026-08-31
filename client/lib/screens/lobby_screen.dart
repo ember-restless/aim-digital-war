@@ -29,12 +29,14 @@ class LobbyScreen extends StatefulWidget {
   final String playerName;
   final String packId;
   final bool lan; // 局域网模式：UDP 发现 + 创建者当主机
+  final String source; // 'train'=训练场远程联机（对局写 IRL 数据）；'online'=联机大厅（不写）
   const LobbyScreen({
     super.key,
     required this.server,
     required this.playerName,
     required this.packId,
     this.lan = false,
+    this.source = 'online',
   });
 
   @override
@@ -251,6 +253,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
               'name': widget.playerName,
               'title': _lanServer!.roomTitle,
               'password': _lanServer!.password,
+              'source': widget.source,
             });
           } else if (_pendingJoin != null) {
             socket.emit('join_room', {
@@ -432,6 +435,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
       'title': titleCtrl.text.trim().isEmpty ? null : titleCtrl.text.trim(),
       'password': pwdCtrl.text.trim().isEmpty ? null : pwdCtrl.text.trim(),
       'allowOwnRollerAttack': allowOwn,
+      'source': widget.source,
     });
   }
 

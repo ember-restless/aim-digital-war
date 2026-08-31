@@ -855,8 +855,11 @@ class _GameScreenState extends State<GameScreen> with TickerProviderStateMixin {
       final nv = (newCells[j]['v'] as num?)?.toInt() ?? 0;
       if (nv != oldV) _addHit(j, oldV, nv);
     } else {
+      final oldV = (prevCells[j]['v'] as num?)?.toInt() ?? 0;
       final nv = (newCells[j]['v'] as num?)?.toInt() ?? 0;
-      if (nv > 0) _addHit(j, 0, nv);
+      if (nv != oldV) _addHit(j, oldV, nv);
+      // 9+1=10：个位0空地插入右侧（与拆分插入动画同款）
+      if (la['inserted'] == true) _addInsertAnim(j + 1);
     }
   }
 

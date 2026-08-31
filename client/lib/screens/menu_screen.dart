@@ -11,6 +11,7 @@ import 'package:gal/gal.dart';
 import '../art/art_manager.dart';
 import '../core/config.dart';
 import '../game/ai.dart';
+import '../game/alphabeta_ai.dart';
 import '../game/tips.dart';
 import '../net/server_list.dart';
 import '../core/settings_store.dart';
@@ -30,17 +31,17 @@ const _orange = Color(0xFFE8A33D);
 const _border = Color(0xFF5A554C);
 const _green = Color(0xFF61D39E);
 
-// 本地对战对手选择（玩家双人 / AI 三档）
+// 本地对战对手选择（玩家双人 / AI 三档：αβ 剪枝深度 3/4/5）
 enum _AiOption {
-  player('玩家双人', '两人共用一台设备轮流操作', null),
-  easy('AI·简单', '随机出招，新手练手', AiLevel.easy),
-  normal('AI·普通', '会攻击会合体，有来有回', AiLevel.normal),
-  hard('AI·困难', '防守老练，会卡你走位', AiLevel.hard);
+  player('玩家双人', '两人共用一台设备轮流操作', 0),
+  easy('AI·简单', 'αβ 剪枝 · 深度3', 3),
+  normal('AI·普通', 'αβ 剪枝 · 深度4', 4),
+  hard('AI·困难', 'αβ 剪枝 · 深度5', 5);
 
   final String label;
   final String desc;
-  final AiLevel? ai;
-  const _AiOption(this.label, this.desc, this.ai);
+  final int abDepth; // αβ 搜索深度（0=无 AI，玩家双人）
+  const _AiOption(this.label, this.desc, this.abDepth);
 }
 
 class MenuScreen extends StatefulWidget {
@@ -349,10 +350,11 @@ class _MenuScreenState extends State<MenuScreen> {
   }
 
   Future<void> _enterHotseat() async {
-    // 本地对战：选地图大小 + 对手（玩家双人 / AI 三档）+ 规则开关（滚木能否被己方攻击）
+    // 本地对战：选地图大小 + 对手（玩家双人 / AI 三档）+ 我执边 + 规则开关
     var allowOwnRollerAttack = true; // 默认开（保持「敌我皆可」）
     var aiLevel = _AiOption.values.first; // 默认玩家双人
-    final pick = await showDialog<(int, bool, _AiOption)>(
+    var humanSide = 0; // 我执（0=左/玩家0，1=右/玩家1）
+    final pick = await showDialog<(int, bool, _AiOption, int)>(
       context: context,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setDlg) {
         return AlertDialog(
@@ -363,7 +365,7 @@ class _MenuScreenState extends State<MenuScreen> {
             Row(mainAxisAlignment: MainAxisAlignment.center, children: [
               for (final l in [12, 14, 16]) ...[
                 InkWell(
-                  onTap: () => Navigator.pop(ctx, (l, allowOwnRollerAttack, aiLevel)),
+                  onTap: () => Navigator.pop(ctx, (l, allowOwnRollerAttack, aiLevel, humanSide)),
                   child: Container(
                     margin: const EdgeInsets.symmetric(horizontal: 6),
                     padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
@@ -374,7 +376,7 @@ class _MenuScreenState extends State<MenuScreen> {
               ],
             ]),
             const SizedBox(height: 14),
-            // 对手选择：玩家双人 / AI 三档
+            // 对手选择：玩家双人 / AI 三档（αβ 剪枝）
             _pt('对手', 12, _dim),
             const SizedBox(height: 6),
             Wrap(spacing: 6, runSpacing: 6, children: [
@@ -394,6 +396,26 @@ class _MenuScreenState extends State<MenuScreen> {
             const SizedBox(height: 6),
             _pt(aiLevel.desc, 10, _dim),
             const SizedBox(height: 14),
+            // 我执边（仅打 AI 时可选；玩家双人时隐藏）
+            if (aiLevel.abDepth > 0) ...[
+              _pt('我执', 12, _dim),
+              const SizedBox(height: 6),
+              Wrap(spacing: 6, children: [
+                for (final (side, label) in [(0, '左 · 玩家0'), (1, '右 · 玩家1')])
+                  InkWell(
+                    onTap: () => setDlg(() => humanSide = side),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: humanSide == side ? const Color(0xFF3A2A1C) : const Color(0xFF2A2824),
+                        border: Border.all(color: humanSide == side ? _signal : _border),
+                      ),
+                      child: _pt(label, 12, humanSide == side ? _signal : _paper, bold: humanSide == side),
+                    ),
+                  ),
+              ]),
+              const SizedBox(height: 10),
+            ],
             // 规则开关：滚木能否被己方攻击
             InkWell(
               onTap: () => setDlg(() => allowOwnRollerAttack = !allowOwnRollerAttack),
@@ -418,7 +440,7 @@ class _MenuScreenState extends State<MenuScreen> {
       }),
     );
     if (pick == null || !mounted) return;
-    final (limit, allowOwn, opponent) = pick;
+    final (limit, allowOwn, opponent, pickedSide) = pick;
     final name = SettingsStore.playerName.isEmpty ? '玩家1' : SettingsStore.playerName;
     Navigator.push(context, MaterialPageRoute(
         builder: (_) => HotseatScreen(
@@ -426,7 +448,11 @@ class _MenuScreenState extends State<MenuScreen> {
             packId: widget.packId,
             limit: limit,
             allowOwnRollerAttack: allowOwn,
-            aiLevel: opponent.ai)));
+            humanSide: pickedSide,
+            aiLevel: null,
+            aiDecider: opponent.abDepth > 0
+                ? ((game) => AlphaBetaAi(depth: opponent.abDepth, timeBudgetMs: 2000).decide(game))
+                : null)));
   }
 
   void _alert(String title, String msg) {

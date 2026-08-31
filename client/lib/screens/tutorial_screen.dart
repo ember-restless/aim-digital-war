@@ -376,8 +376,11 @@ class _TutorialScreenState extends State<TutorialScreen> with TickerProviderStat
       final nv = _engine.cells[j].v;
       if (nv != oldV) _addTutHit(j, oldV, nv);
     } else {
+      final oldV = base[j].v;
       final nv = _engine.cells[j].v;
-      if (nv > 0) _addTutHit(j, 0, nv);
+      if (nv != oldV) _addTutHit(j, oldV, nv);
+      // 9+1=10：个位0空地插入右侧（与拆分插入动画同款）
+      if (la['inserted'] == true) _addTutInsert(j + 1);
     }
   }
 

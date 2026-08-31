@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 
 import '../game/ai.dart';
+import '../game/rules.dart';
 import '../game/tips.dart';
 import '../net/local_socket.dart';
 import '../core/bgm_manager.dart';
@@ -22,7 +23,9 @@ class HotseatScreen extends StatefulWidget {
   final int limit;
   final bool allowOwnRollerAttack; // 规则开关：己方能否攻击己方滚木
   final AiLevel? aiLevel; // null=双人热座；非 null=玩家 vs AI
-  const HotseatScreen({super.key, required this.playerName, required this.packId, required this.limit, this.allowOwnRollerAttack = true, this.aiLevel});
+  final Map<String, dynamic>? Function(AimGame game)? aiDecider; // αβ 等自定义 AI（优先于 aiLevel）
+  final int humanSide; // 人类所在侧（0=左，1=右）；AI 在另一侧
+  const HotseatScreen({super.key, required this.playerName, required this.packId, required this.limit, this.allowOwnRollerAttack = true, this.aiLevel, this.aiDecider, this.humanSide = 0});
 
   @override
   State<HotseatScreen> createState() => _HotseatScreenState();
@@ -39,7 +42,9 @@ class _HotseatScreenState extends State<HotseatScreen> {
     socket = LocalAimSocket(
         limit: widget.limit,
         allowOwnRollerAttack: widget.allowOwnRollerAttack,
-        aiLevel: widget.aiLevel);
+        aiLevel: widget.aiLevel,
+        aiDecider: widget.aiDecider,
+        humanSide: widget.humanSide);
     socket.onEvent = (event, data) {
       if (!mounted) return;
       if (event == 'game_state') {
@@ -83,12 +88,12 @@ class _HotseatScreenState extends State<HotseatScreen> {
         child: SafeArea(
           child: Center(
             child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              _pt('🔥 ${widget.aiLevel == null ? '热座' : '人机对战'}', 22, _signal, bold: true),
+              _pt('🔥 ${(widget.aiLevel == null && widget.aiDecider == null) ? '热座' : '人机对战'}', 22, _signal, bold: true),
               const SizedBox(height: 8),
-              _pt('${widget.aiLevel == null ? '双人轮流 · 地图' : '玩家 vs AI · 地图'} ${widget.limit} 格', 13, _dim),
-              if (widget.aiLevel != null) ...[
+              _pt('${(widget.aiLevel == null && widget.aiDecider == null) ? '双人轮流 · 地图' : '玩家 vs AI · 地图'} ${widget.limit} 格', 13, _dim),
+              if (widget.aiLevel != null || widget.aiDecider != null) ...[
                 const SizedBox(height: 4),
-                _pt('对手：${_aiName(widget.aiLevel!)}', 12, _paper),
+                _pt('对手：${widget.aiDecider != null ? 'αβ·剪枝大师' : _aiName(widget.aiLevel!)} · 我执${widget.humanSide == 0 ? '左' : '右'}', 12, _paper),
               ],
               const SizedBox(height: 16),
               const SizedBox(width: 28, height: 28, child: CircularProgressIndicator(color: _signal, strokeWidth: 2)),

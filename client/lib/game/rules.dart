@@ -37,6 +37,15 @@ class AimCell {
         'pressedO': pressedO,
       };
 
+  /// 深拷贝（保持 id 稳定，供前瞻模拟克隆棋盘用）
+  AimCell clone() {
+    final c = AimCell(v, o: o, bridge: bridge, onBridge: onBridge, auto: auto);
+    c.id = id;
+    c.pressedV = pressedV;
+    c.pressedO = pressedO;
+    return c;
+  }
+
   static AimCell fromMap(Map<String, dynamic> m) {
     final c = AimCell(
       (m['v'] as num?)?.toInt() ?? 0,
@@ -90,6 +99,51 @@ class AimGame {
     cells = List.generate(init, (_) => AimCell(0));
     cells[0] = AimCell(8, o: 0); // 玩家0基地（左端）
     cells[init - 1] = AimCell(8, o: 1); // 玩家1基地（右端）
+  }
+
+  /// 深拷贝（前瞻模拟用）：克隆全部可变状态，滚木引用按 id 重新映射
+  AimGame clone() {
+    final g = AimGame(limit: limit, allowOwnRollerAttack: allowOwnRollerAttack);
+    g.cells = cells.map((c) => c.clone()).toList();
+    g.turn = turn;
+    g.phase = phase;
+    g.points = points;
+    g.produceLeft = produceLeft;
+    g.winner = winner;
+    g.log = List.of(log);
+    g.lastAction = lastAction == null ? null : Map<String, dynamic>.of(lastAction!);
+    g.lastSeq = lastSeq;
+    g.rollSeq = rollSeq;
+    g.rollSteps = rollSteps == null
+        ? null
+        : rollSteps!.map((m) => Map<String, dynamic>.of(m)).toList();
+    g.stats = {
+      'kills': List<int>.of((stats['kills'] as List).cast<int>()),
+      'losses': List<int>.of((stats['losses'] as List).cast<int>()),
+      'produce': List<int>.of((stats['produce'] as List).cast<int>()),
+    };
+    g.turnCount = turnCount;
+    g._opHistory = Map<String, int>.of(_opHistory);
+    g._lastOpRepeatWarn = _lastOpRepeatWarn;
+    // 滚木逐步状态（引用按 id 映射到克隆后的新 cells）
+    g._rsOwner = _rsOwner;
+    g._rsRollers = _rsRollers
+        ?.map((c) => cells.firstWhere((x) => x.id == c.id, orElse: () => c))
+        .toList();
+    g._rsIdx = _rsIdx;
+    g._rsPos = _rsPos;
+    g._rsStep = _rsStep;
+    g._rsRolled.addAll(_rsRolled);
+    g._rsDone.addAll(_rsDone);
+    g._rsActive = _rsActive;
+    g._rsLogs.addAll(_rsLogs);
+    g._rsSteps.addAll(_rsSteps.map((m) => Map<String, dynamic>.of(m)));
+    g._lastRollActs = _lastRollActs == null
+        ? null
+        : _lastRollActs!.map((m) => Map<String, dynamic>.of(m)).toList();
+    g._rollStepSeq = _rollStepSeq;
+    g._pendingRoll = _pendingRoll;
+    return g;
   }
 
   int dirOf(int owner) => kDir[owner];
@@ -426,17 +480,26 @@ class AimGame {
       lastSeq++;
       lastAction = {'type': 'produce', 'j': j, 'attacked': true, 'owner': owner};
     } else {
+      bool inserted = false;
       if (t.v == 9) {
-        // 9+1=10 → 简化处理：[1]，前方不插
+        // 9+1=10 → [1][0]：十位1留在原格，个位0空地插到右侧（与拆分同构：产物固定插索引+1）
         t.v = 1;
         t.o = owner;
+        final ins = j + 1;
+        if (ins >= 0 && ins <= cells.length && cells.length < limit) {
+          cells.insert(ins, AimCell(0));
+          inserted = true;
+          log.add('造兵：9+1=10 → [1][0]（插入个位0空地）');
+        } else {
+          log.add('造兵：9+1 满格 → 只保留十位1');
+        }
       } else {
         t.v += 1;
         t.o = owner;
+        log.add('造兵：基地前${t.v - 1} → ${t.v}');
       }
-      log.add('造兵：基地前${t.v - 1} → ${t.v}');
       lastSeq++;
-      lastAction = {'type': 'produce', 'j': j, 'attacked': false, 'newV': t.v, 'owner': owner};
+      lastAction = {'type': 'produce', 'j': j, 'attacked': false, 'newV': t.v, 'inserted': inserted, 'owner': owner};
     }
     _statsList('produce')[owner]++;
     return true;

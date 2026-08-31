@@ -33,7 +33,7 @@ class LocalAimSocket extends AIMSocket {
   Map<String, dynamic>? Function(AimGame game)? aiDecider;
   void Function(Map<String, dynamic> gameData)? onGameRecorded;
 
-  LocalAimSocket({this.limit = 16, bool allowOwnRollerAttack = true, this.aiLevel, this.humanSide = 0})
+  LocalAimSocket({this.limit = 16, bool allowOwnRollerAttack = true, this.aiLevel, this.humanSide = 0, this.aiDecider})
       : game = AimGame(limit: limit, allowOwnRollerAttack: allowOwnRollerAttack),
         super('local://hotseat');
 
